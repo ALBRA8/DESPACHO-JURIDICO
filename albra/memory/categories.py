@@ -1,0 +1,17 @@
+"""Categorías de memoria ALBRA - SEPARACIÓN ESTRICTA."""
+
+MEM_CONVERSATIONAL = "conversational"
+MEM_OPERATIONAL = "operational"
+MEM_KNOWLEDGE = "knowledge"
+MEM_DOCUMENTAL = "documental"
+MEM_EVIDENCE = "evidence"
+MEM_CONFIG = "config"
+
+MEMORY_CATEGORIES = (
+    MEM_CONVERSATIONAL,
+    MEM_OPERATIONAL,
+    MEM_KNOWLEDGE,
+    MEM_DOCUMENTAL,
+    MEM_EVIDENCE,
+    MEM_CONFIG,
+)
