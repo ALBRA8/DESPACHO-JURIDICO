@@ -21,44 +21,50 @@ def test_plugin_manager_starts_empty():
 
 def test_contract_redline_plugin_registers_tool():
     """El plugin de redlining registra 'contract_analyzer'."""
-    agent = get_agent()
-    asyncio.run(agent.boot())
-    pm = PluginManager()
-    pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
-    tools = [t["name"] for t in agent.organs["tools"].list()]
-    assert "contract_analyzer" in tools
-    asyncio.run(agent.shutdown())
+    async def _run():
+        agent = get_agent()
+        await agent.boot()
+        pm = PluginManager()
+        await pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
+        tools = [t["name"] for t in agent.organs["tools"].list()]
+        assert "contract_analyzer" in tools
+        await agent.shutdown()
+    asyncio.run(_run())
 
 
 def test_contract_analyzer_detects_risk():
     """El analyzer detecta cláusulas de riesgo reales."""
-    agent = get_agent()
-    asyncio.run(agent.boot())
-    pm = PluginManager()
-    pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
-    sample = """
-    El contratista indemnizará por cualquier daño causado al cliente.
-    La empresa no será responsable por daños indirectos.
-    El contratante renuncia expresamente al derecho de ejercer acción judicial.
-    """
-    result = asyncio.run(agent.organs["tools"].invoke(
-        "contract_analyzer", {"text": sample}, user="test"
-    ))
-    assert result["ok"] is True
-    assert result["value"]["count"] >= 2
-    kinds = [r["kind"] for r in result["value"]["risks"]]
-    assert "indemnidad_amplia" in kinds
-    assert "renuncia_derechos" in kinds
-    asyncio.run(agent.shutdown())
+    async def _run():
+        agent = get_agent()
+        await agent.boot()
+        pm = PluginManager()
+        await pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
+        sample = """
+        El contratista indemnizará por cualquier daño causado al cliente.
+        La empresa no será responsable por daños indirectos.
+        El contratante renuncia expresamente al derecho de ejercer acción judicial.
+        """
+        result = await agent.organs["tools"].invoke(
+            "contract_analyzer", {"text": sample}, user="test"
+        )
+        assert result["ok"] is True
+        assert result["value"]["count"] >= 2
+        kinds = [r["kind"] for r in result["value"]["risks"]]
+        assert "indemnidad_amplia" in kinds
+        assert "renuncia_derechos" in kinds
+        await agent.shutdown()
+    asyncio.run(_run())
 
 
 def test_plugin_unregister():
-    agent = get_agent()
-    asyncio.run(agent.boot())
-    pm = PluginManager()
-    pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
-    assert len(pm.list()) == 1
-    asyncio.run(agent.shutdown())
+    async def _run():
+        agent = get_agent()
+        await agent.boot()
+        pm = PluginManager()
+        await pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
+        assert len(pm.list()) == 1
+        await agent.shutdown()
+    asyncio.run(_run())
 
 
 def test_policy_engine_evaluates_menor_edad():

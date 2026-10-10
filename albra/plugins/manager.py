@@ -109,7 +109,8 @@ class PluginManager:
         self._plugins: dict[str, PluginInstance] = {}
         self._contexts: dict[str, PluginContext] = {}
 
-    def register(self, plugin: PluginInstance, *, agent: Any = None) -> dict[str, Any]:
+    async def register(self, plugin: PluginInstance, *, agent: Any = None) -> dict[str, Any]:
+        """Versión async - usar desde un loop async."""
         if plugin.manifest.name in self._plugins:
             raise ValueError(f"Plugin '{plugin.manifest.name}' ya está registrado")
         for req in plugin.manifest.requires:
@@ -117,7 +118,7 @@ class PluginManager:
                 raise ValueError(f"Plugin requiere '{req}' que no está cargado")
         ctx = PluginContext(agent=agent)
         self._contexts[plugin.manifest.name] = ctx
-        result = asyncio.run(plugin.register(ctx))
+        result = await plugin.register(ctx)
         self._plugins[plugin.manifest.name] = plugin
         self.log.info(
             "plugin.registered",
@@ -128,13 +129,17 @@ class PluginManager:
         )
         return result
 
-    def unregister(self, name: str) -> dict[str, Any]:
+    def register_sync(self, plugin: PluginInstance, *, agent: Any = None) -> dict[str, Any]:
+        """Versión sync - crea un loop nuevo."""
+        return asyncio.run(self.register(plugin, agent=agent))
+
+    async def unregister(self, name: str) -> dict[str, Any]:
         if name not in self._plugins:
             return {"ok": False, "error": f"Plugin '{name}' no encontrado"}
         plugin = self._plugins[name]
         ctx = self._contexts.get(name)
         if plugin.unregister and ctx:
-            asyncio.run(plugin.unregister(ctx))
+            await plugin.unregister(ctx)
         del self._plugins[name]
         if name in self._contexts:
             del self._contexts[name]

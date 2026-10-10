@@ -87,7 +87,9 @@ class ReasoningEngine:
         if intent["name"] == "tool_request":
             tool = self._extract_tool(msg_lower)
             if tool:
-                steps.append({"type": "tool_call", "tool": tool, "input": {}})
+                # Extraer parámetros del mensaje
+                tool_input = self._extract_tool_input(tool, message)
+                steps.append({"type": "tool_call", "tool": tool, "input": tool_input})
 
         return {
             "summary": "; ".join(conclusions_layer),
@@ -154,6 +156,27 @@ class ReasoningEngine:
         if "hora" in msg or "fecha" in msg:
             return "clock"
         return None
+
+    def _extract_tool_input(self, tool: str, message: str) -> dict[str, Any]:
+        """Extrae parámetros del mensaje para una tool."""
+        if tool == "calculator":
+            # Buscar expresión matemática
+            import re
+            # Tomar lo que viene después de "calcula" o "calcular"
+            m = re.search(r"calcul(?:a|ar)\s+(.+)", message, re.IGNORECASE)
+            if m:
+                expr = m.group(1).strip().rstrip("?.").strip()
+                return {"expression": expr}
+            # Si no, tomar cualquier cosa que parezca expr
+            m = re.search(r"[\d\s\+\-\*\/\(\)\.\%\^]+", message)
+            if m:
+                return {"expression": m.group(0).strip()}
+            return {"expression": ""}
+        if tool == "clock":
+            return {}
+        if tool == "searcher":
+            return {"query": message}
+        return {}
 
     def _compose_response(
         self,
