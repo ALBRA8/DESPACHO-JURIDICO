@@ -1,7 +1,6 @@
 """Tests de identidad - criterios 1, 33, 34, 35, 36."""
 from albra.identity.manifest import (
     AGENT_MANIFEST,
-    AgentIdentity,
     ALBRA_DNA_ORGANS,
     ALBRA_PRINCIPLES,
 )

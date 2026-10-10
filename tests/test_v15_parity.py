@@ -1,35 +1,29 @@
 """Tests de los órganos V1.5 - paridad holding."""
 import asyncio
-import os
 import tempfile
 
-from albra.config.settings import Settings
-from albra.observability.execution_trace import ExecutionTrace
-from albra.security.autonomy import AutonomyController, LEVELS
 from albra.doctor.self_improve import SelfImprove
-from albra.security.policy_state import PolicyEngineState, VALID_MODES
-from albra.security.classification import classify, DataClassification, label
-from albra.security.rbac import has_permission, ROLES, list_roles, permissions_for
-from albra.resilience.circuit_breaker import CircuitBreaker
-from albra.evidence.legal_gate import LegalGate, LEGAL_RULES
-from albra.memory.interface import (
-    MemoryInterface,
-    InMemoryProvider,
-    SQLiteProvider,
-    MemoryItem,
-    TRUTH_LEVELS,
-    PROVENANCE_TYPES,
-    can_back_compliance,
-    normalize_truth_level,
-)
-from albra.security.execution_guard import ExecutionGuard
+from albra.evidence.legal_gate import LEGAL_RULES, LegalGate
 from albra.knowledge.specialists import (
     SPECIALIST_CATALOG,
     get_specialist,
-    list_specialists,
     is_specialist_ready,
+    list_specialists,
 )
-
+from albra.memory.interface import (
+    PROVENANCE_TYPES,
+    TRUTH_LEVELS,
+    MemoryInterface,
+    can_back_compliance,
+    normalize_truth_level,
+)
+from albra.observability.execution_trace import ExecutionTrace
+from albra.resilience.circuit_breaker import CircuitBreaker
+from albra.security.autonomy import LEVELS, AutonomyController
+from albra.security.classification import DataClassification, classify, label
+from albra.security.execution_guard import ExecutionGuard
+from albra.security.policy_state import VALID_MODES, PolicyEngineState
+from albra.security.rbac import ROLES, has_permission, permissions_for
 
 # --- ExecutionTrace ---
 
@@ -468,7 +462,7 @@ def test_normalize_truth_level():
 def test_memory_interface_inmemory():
     mi = MemoryInterface(backend="inmemory")
     asyncio.run(mi.startup())
-    eid = asyncio.run(mi.write("hello world", category="conversational", truth_level="VERIFIED", provenance="USER_INPUT"))
+    asyncio.run(mi.write("hello world", category="conversational", truth_level="VERIFIED", provenance="USER_INPUT"))
     items = asyncio.run(mi.retrieve("hello"))
     assert len(items) >= 1
     assert items[0].text == "hello world"
@@ -518,42 +512,145 @@ def test_memory_interface_decay():
 # --- Execution Guard ---
 
 def test_execution_guard_blocks_when_kill_switch():
+    """V1.6: ExecutionGuard fail-closed - todos los deps obligatorios."""
+    from albra.security.autonomy import AutonomyController
     from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
     with tempfile.TemporaryDirectory() as tmp:
         ps = PolicyEngineState(f"{tmp}/ps.db")
         ps.engage_kill_switch(reason="test")
         guard = ExecutionGuard()
-        v = guard.check(action="publish_legal_filing", user_role="admin", policy_state=ps.get_state())
+        # V1.6: todos los deps son obligatorios
+        v = guard.check(
+            action="publish_legal_filing", user_role="admin",
+            policy_state=ps.get_state(),
+            autonomy_controller=AutonomyController(),
+            rbac_check_fn=has_permission,
+            legal_gate_verdict=LegalGate().evaluate(
+                "publish_legal_filing", actor_role="admin"
+            ),
+            live_authorized=True,
+            hitl_approved=True,
+        )
         assert not v.allowed
         ps.close()
 
 
+def test_execution_guard_fail_closed_missing_deps():
+    """V1.6 P0.2: Si falta un dep obligatorio → DENY (no skip)."""
+    guard = ExecutionGuard()
+    # Sin pasar policy_state, autonomy, rbac, legal_gate → DENY
+    v = guard.check(
+        action="internal_research", user_role="anon",
+        policy_state=None,
+        autonomy_controller=None,
+        rbac_check_fn=None,
+        legal_gate_verdict=None,
+    )
+    assert not v.allowed
+    assert "FAIL-CLOSED" in v.reason
+    assert "missing" in v.reason
+
+
 def test_execution_guard_blocks_without_live():
     guard = ExecutionGuard()
-    v = guard.check(action="sign_document", user_role="admin", live_authorized=False)
-    assert not v.allowed
+    from albra.security.autonomy import AutonomyController
+    from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
+    with tempfile.TemporaryDirectory() as tmp:
+        ps = PolicyEngineState(f"{tmp}/ps.db")
+        v = guard.check(
+            action="sign_document", user_role="admin",
+            policy_state=ps.get_state(),
+            autonomy_controller=AutonomyController(),
+            rbac_check_fn=has_permission,
+            legal_gate_verdict=LegalGate().evaluate(
+                "sign_document", actor_role="admin"
+            ),
+            live_authorized=False,
+        )
+        assert not v.allowed
+        ps.close()
 
 
 def test_execution_guard_dedup():
+    """V1.6 P0.3: dedup solo se reserva si TODOS los checks pasan."""
     guard = ExecutionGuard()
-    v1 = guard.check(action="internal_research", user_role="admin", dedup_key="action_1")
-    v2 = guard.check(action="internal_research", user_role="admin", dedup_key="action_1")
-    assert v1.allowed
-    assert not v2.allowed  # dedup
+    from albra.security.autonomy import AutonomyController
+    from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
+    with tempfile.TemporaryDirectory() as tmp:
+        ps = PolicyEngineState(f"{tmp}/ps.db")
+        common = {
+            "policy_state": ps.get_state(),
+            "autonomy_controller": AutonomyController(),
+            "rbac_check_fn": has_permission,
+            "legal_gate_verdict": LegalGate().evaluate(
+                "internal_research", actor_role="admin"
+            ),
+        }
+        v1 = guard.check(
+            action="internal_research", user_role="admin",
+            dedup_key="action_1", **common,
+        )
+        v2 = guard.check(
+            action="internal_research", user_role="admin",
+            dedup_key="action_1", **common,
+        )
+        assert v1.allowed
+        assert not v2.allowed  # dedup blocked second time
+        ps.close()
+
+
+def test_execution_guard_dedup_not_consumed_on_deny():
+    """V1.6 P0.3: acción rechazada NO consume dedup slot."""
+    guard = ExecutionGuard()
+    from albra.security.autonomy import AutonomyController
+    from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
+    with tempfile.TemporaryDirectory() as tmp:
+        ps = PolicyEngineState(f"{tmp}/ps.db")
+        # Primero: acción DENIED (role anon no tiene permiso)
+        v1 = guard.check(
+            action="publish_legal_filing", user_role="anon",
+            policy_state=ps.get_state(),
+            autonomy_controller=AutonomyController(),
+            rbac_check_fn=has_permission,
+            legal_gate_verdict=LegalGate().evaluate(
+                "publish_legal_filing", actor_role="anon"
+            ),
+            dedup_key="special_action_X",
+            live_authorized=True,
+        )
+        assert not v1.allowed
+        assert not v1.dedup_reserved
+        # El slot NO fue consumido
+        assert not guard.is_executed("special_action_X")
+        ps.close()
 
 
 def test_execution_guard_with_legal_gate_blocked():
     gate = LegalGate()
-    verdict = gate.evaluate("send_external_communication", text="password=secret")
-    guard = ExecutionGuard()
-    v = guard.check(
-        action="send_external_message",
-        user_role="admin",
-        live_authorized=True,
-        hitl_approved=True,
-        legal_gate_verdict=verdict,
+    verdict = gate.evaluate(
+        "send_external_communication", text="password=secret"
     )
-    assert not v.allowed
+    guard = ExecutionGuard()
+    from albra.security.autonomy import AutonomyController
+    from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
+    with tempfile.TemporaryDirectory() as tmp:
+        ps = PolicyEngineState(f"{tmp}/ps.db")
+        v = guard.check(
+            action="send_external_message", user_role="admin",
+            policy_state=ps.get_state(),
+            autonomy_controller=AutonomyController(),
+            rbac_check_fn=has_permission,
+            legal_gate_verdict=verdict,
+            live_authorized=True,
+            hitl_approved=True,
+        )
+        assert not v.allowed
+        ps.close()
 
 
 # --- Specialists ---

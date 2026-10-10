@@ -16,20 +16,52 @@ from __future__ import annotations
 from typing import Any
 
 from albra.config.settings import Settings
+from albra.mcp.protocol import MCPCapability, MCPRequest, MCPResponse
 from albra.observability.logger import get_logger
-from albra.mcp.protocol import MCPRequest, MCPResponse, MCPCapability
 
 
 class MCPServer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.log = get_logger("albra.mcp.server")
-        self._tool_registry: Any = None  # se inyecta en runtime
+        self._tool_registry: Any = None
         self._cap_registry: Any = None
+        # P1: security perimeter - NUNCA bypass
+        self._execution_guard: Any = None
+        self._audit: Any = None
+        self._policy_state: Any = None
+        self._autonomy_controller: Any = None
+        self._rbac_check_fn: Any = None
+        self._legal_gate: Any = None
 
-    def wire(self, *, tool_registry: Any, capability_registry: Any) -> None:
+    def wire(
+        self,
+        *,
+        tool_registry: Any,
+        capability_registry: Any,
+        execution_guard: Any = None,
+        audit: Any = None,
+        policy_state: Any = None,
+        autonomy_controller: Any = None,
+        rbac_check_fn: Any = None,
+        legal_gate: Any = None,
+    ) -> None:
         self._tool_registry = tool_registry
         self._cap_registry = capability_registry
+        self._execution_guard = execution_guard
+        self._audit = audit
+        self._policy_state = policy_state
+        self._autonomy_controller = autonomy_controller
+        self._rbac_check_fn = rbac_check_fn
+        self._legal_gate = legal_gate
+        self.log.info(
+            "mcp.wired",
+            guard=execution_guard is not None,
+            rbac=rbac_check_fn is not None,
+            policy=policy_state is not None,
+            autonomy=autonomy_controller is not None,
+            legal=legal_gate is not None,
+        )
 
     async def startup(self) -> None:
         self.log.info("mcp.server.startup")
@@ -89,12 +121,68 @@ class MCPServer:
         return {"capabilities": self._cap_registry.list()}
 
     async def _m_tools_call(self, params: dict[str, Any]) -> dict[str, Any]:
+        """P1: TODO tool call vía ExecutionGuard - NUNCA bypass.
+
+        Si execution_guard no está cableado → DENY explícito.
+        """
         if not self._tool_registry:
             return {"ok": False, "error": "tool registry no cableada"}
+
         name = params.get("name")
         args = params.get("arguments", {})
         user = params.get("user", "mcp_client")
-        return await self._tool_registry.invoke(name, args, user=user)
+        user_role = params.get("role", "anon")
+
+        # P1: si no hay ExecutionGuard cableado → DENY
+        if self._execution_guard is None:
+            return {
+                "ok": False,
+                "error": "FAIL-CLOSED: ExecutionGuard no cableado a MCP",
+                "status": "DENIED",
+            }
+
+        # Evaluar legal gate para la action
+        legal_verdict = None
+        if self._legal_gate is not None:
+            legal_verdict = self._legal_gate.evaluate(
+                "tool_invocation",
+                text=str(args),
+                actor_role=user_role,
+            )
+
+        # Pasar por ExecutionGuard (fail-closed TOTAL)
+        guard_verdict = self._execution_guard.check(
+            action="tool_invocation",
+            user_role=user_role,
+            policy_state=self._policy_state.get_state() if self._policy_state else None,
+            autonomy_controller=self._autonomy_controller,
+            rbac_check_fn=self._rbac_check_fn or (lambda *_: False),
+            legal_gate_verdict=legal_verdict,
+            dedup_key=f"mcp:{name}:{user}",
+        )
+
+        if not guard_verdict.allowed:
+            if self._audit is not None:
+                await self._audit.record("mcp.guard.deny", guard_verdict.as_dict())
+            return {
+                "ok": False,
+                "error": f"Guard deny: {guard_verdict.reason}",
+                "status": "DENIED",
+                "guard": guard_verdict.as_dict(),
+            }
+
+        # Solo si pasa el guard → invocar tool
+        try:
+            result = await self._tool_registry.invoke(name, args, user=user)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e), "status": "FAILURE"}
+
+        if self._audit is not None:
+            await self._audit.record("mcp.tool.invoke", {
+                "tool": name, "user": user, "ok": result.get("ok", False),
+            })
+
+        return result
 
     async def _m_health(self, params: dict[str, Any]) -> dict[str, Any]:
         return {

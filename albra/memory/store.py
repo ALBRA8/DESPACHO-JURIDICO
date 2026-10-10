@@ -23,12 +23,13 @@ import math
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from albra.config.settings import Settings
-from albra.memory.categories import MEMORY_CATEGORIES, MEM_CONFIG
+from albra.memory.categories import MEMORY_CATEGORIES
 from albra.observability.logger import get_logger
 
 
@@ -123,7 +124,7 @@ class MemoryDV:
         self,
         text: str,
         *,
-        category: str = MEM_CONVERSATIONAL if False else "conversational",  # placeholder
+        category: str = "conversational",
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """WRITE → INDEX → EMBED → STORE."""

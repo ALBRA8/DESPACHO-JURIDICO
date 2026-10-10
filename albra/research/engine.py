@@ -20,13 +20,12 @@ NO presentar como hecho aquello que no pudo verificarse.
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from albra.config.settings import Settings
-from albra.observability.logger import get_logger
 from albra.evidence.chain import EvidenceChain
+from albra.observability.logger import get_logger
 
 
 @dataclass

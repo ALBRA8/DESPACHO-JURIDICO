@@ -47,3 +47,32 @@ addopts = "-ra -q --tb=short"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# Reglas que importan para detectar bugs reales, no opinions de estilo.
+select = [
+    "E",   # pycodestyle errors (syntax)
+    "F",   # pyflakes (undefined names, unused imports, etc.)
+    "I",   # isort (import order)
+    "W",   # pycodestyle warnings
+    "B",   # bugbear (likely bugs)
+]
+ignore = [
+    "E501",   # line too long (cosmetic)
+    "E402",   # module-level import not at top (we do conditional imports)
+    "E722",   # bare except (we use it intentionally in some places)
+    "E731",   # lambda assignment (acceptable in some cases)
+    "B008",   # function call in defaults (FastAPI Depends pattern)
+    "B904",   # raise from in except - we have many but acceptable
+    "B007",   # loop variable not used - acceptable
+    "B017",   # pytest.raises(Exception) - acceptable in tests
+    "B027",   # empty abstract method (acceptable - we use ... or pass intentionally)
+    "B028",   # no stacklevel - acceptable
+    "B904",   # raise from in except - acceptable
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F401", "F811", "B017"]
+"albra/__init__.py" = ["F401"]
+"albra/**/__init__.py" = ["F401"]
+

@@ -1,8 +1,6 @@
 """Registry de providers - LLM, search, TTS, etc."""
 from __future__ import annotations
 
-from typing import Any
-
 from albra.config.settings import Settings
 from albra.observability.logger import get_logger
 from albra.providers.base import Provider
@@ -15,7 +13,7 @@ class ProviderRegistry:
         self._providers: dict[str, Provider] = {}
 
         # Auto-registro de providers según settings
-        from albra.providers.llm import MockLLMProvider, OpenAIProvider, AnthropicProvider
+        from albra.providers.llm import AnthropicProvider, MockLLMProvider, OpenAIProvider
         self.register("mock", MockLLMProvider())
         if settings.openai_api_key:
             self.register("openai", OpenAIProvider(api_key=settings.openai_api_key))

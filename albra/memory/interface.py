@@ -24,7 +24,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # --- Truth Levels (RADAR-SECOP2 evidence.ts style) ---
 TRUTH_LEVELS: tuple[str, ...] = (
     "VERIFIED",       # corroborado por fuente primaria
@@ -297,7 +296,6 @@ class SQLiteProvider(MemoryProvider):
         return item.id
 
     async def retrieve(self, query: str, *, category: str | None = None, top_k: int = 5) -> list[MemoryItem]:
-        import json
         q_emb = _hash_embedding(query, self._dim)
         if category:
             cur = self._conn.execute(
@@ -433,8 +431,8 @@ class MemoryInterface:
         metadata: dict[str, Any] | None = None,
         depends_on: list[str] | None = None,
     ) -> str:
-        import uuid
         import time
+        import uuid
         item = MemoryItem(
             id=uuid.uuid4().hex[:24],
             category=category,

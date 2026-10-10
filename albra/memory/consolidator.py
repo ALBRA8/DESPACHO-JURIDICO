@@ -20,17 +20,15 @@ El proceso de consolidación:
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from albra.observability.logger import get_logger
-from albra.memory.store import MemoryDV
 from albra.memory.categories import (
     MEM_CONVERSATIONAL,
-    MEM_OPERATIONAL,
     MEM_KNOWLEDGE,
 )
+from albra.memory.store import MemoryDV
+from albra.observability.logger import get_logger
 
 
 @dataclass

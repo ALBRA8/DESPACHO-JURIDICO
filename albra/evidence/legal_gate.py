@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from albra.observability.logger import get_logger
-from albra.security.classification import classify, DataClassification
+from albra.security.classification import DataClassification, classify
 
 
 @dataclass
@@ -115,6 +115,10 @@ LEGAL_RULES: dict[str, dict[str, Any]] = {
     "internal_research": {
         "default": "APPROVED",
         "reason": "Investigación interna sin acciones externas",
+    },
+    "tool_invocation": {
+        "default": "APPROVED",
+        "reason": "Invocación de tool interna - sujeta a RBAC + execution_guard",
     },
     "memory_storage": {
         "default": "APPROVED_WITH_LIMITS",

@@ -1,17 +1,13 @@
 """Tests de plugins, policies y triage."""
 import asyncio
 
-from albra.config.settings import Settings
 from albra.identity.agent import get_agent
-from albra.plugins.manager import (
-    PluginManager,
-    PluginInstance,
-    PluginManifest,
-    PluginContext,
-    CONTRACT_REDLINE_PLUGIN,
-)
-from albra.security.policy import PolicyEngine, Policy
 from albra.knowledge.triage import KnowledgeTriage
+from albra.plugins.manager import (
+    CONTRACT_REDLINE_PLUGIN,
+    PluginManager,
+)
+from albra.security.policy import Policy, PolicyEngine
 
 
 def test_plugin_manager_starts_empty():

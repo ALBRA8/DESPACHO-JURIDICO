@@ -55,10 +55,25 @@ class ProviderRouter:
         }
 
     def route(self, prompt: str, *, metadata: dict[str, Any] | None = None) -> RoutingDecision:
-        """Decide qué provider usar para este prompt."""
+        """Decide qué provider usar para este prompt.
+
+        V1.6: usa Classification pasada en metadata['classification']
+        si está disponible. Fallback a keywords propios.
+        """
         prompt_l = prompt.lower()
         sensitive = any(k in prompt_l for k in self.SENSITIVE_KEYWORDS)
         long_ctx = any(k in prompt_l for k in self.LONG_CONTEXT_KEYWORDS) or len(prompt) > 4000
+
+        # V1.6: usar classification si está disponible (más precisa)
+        if metadata and metadata.get("classification"):
+            cls_name = metadata["classification"]
+            # Cualquier clasificación >= DATO_PERSONAL → sensitive
+            sensitive_levels = {
+                "DATO_PERSONAL", "DATO_SENSIBLE", "SECRETO_PROFESIONAL",
+                "EXPEDIENTE_JURIDICO", "CREDENCIAL", "SECRETO_TECNICO",
+            }
+            if cls_name in sensitive_levels:
+                sensitive = True
 
         if sensitive:
             provider_name = self.routing_table["sensitive"]

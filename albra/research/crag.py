@@ -16,8 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from albra.observability.logger import get_logger
 from albra.memory.store import MemoryDV
+from albra.observability.logger import get_logger
 from albra.research.engine import ResearchEngine
 
 

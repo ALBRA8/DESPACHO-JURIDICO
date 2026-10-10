@@ -52,8 +52,9 @@ def test_agent_writes_memory():
     agent = get_agent()
     asyncio.run(agent.boot())
     asyncio.run(agent.process("hola"))
-    stats = agent.organs["memory"].stats()
-    assert sum(stats.values()) >= 1
+    stats = agent.organs["memory"].stats()  # MemoryInterface.stats() - nested dict
+    # V1.6: stats retorna {"by_category": {...}, "total": int, "by_truth_level": {...}, ...}
+    assert stats.get("total", 0) >= 1
     asyncio.run(agent.shutdown())
 
 

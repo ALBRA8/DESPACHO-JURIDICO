@@ -14,9 +14,9 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
+from albra.comms.base import ChannelAdapter, ChannelMessage
 from albra.config.settings import Settings
 from albra.observability.logger import get_logger
-from albra.comms.base import ChannelAdapter, ChannelMessage
 
 
 class CommRouter:

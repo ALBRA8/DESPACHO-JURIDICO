@@ -218,9 +218,15 @@ class SelfImprove:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r, strict=False)) for r in rows]
 
-    # --- FASE 5: PROMOCIÓN ---
+    # --- FASE 5: PROMOCIÓN (con safety P1) ---
 
     def validate_lesson(self, lesson_id: str, *, validator: str = "system") -> bool:
+        """Marca una lesson como validada por humano (no auto-promueve).
+
+        P1 SAFETY: SelfImprove NO puede auto-elevar autonomía, NO puede
+        modificar policy, NO puede modificar código. Solo marca lessons
+        como validadas. La promoción final SIEMPRE requiere HITL explícito.
+        """
         self._conn.execute(
             "UPDATE lessons SET validated = 1 WHERE id = ?",
             (lesson_id,),
@@ -229,17 +235,43 @@ class SelfImprove:
         self.log.info("self_improve.validated", lesson_id=lesson_id, validator=validator)
         return True
 
-    def promote_lesson(self, lesson_id: str) -> bool:
-        """Promueve una lesson validada al system prompt."""
+    def promote_lesson(self, lesson_id: str, *, hitl_request_id: str | None = None) -> dict[str, Any]:
+        """P1 SAFETY: promotion SIEMPRE requiere HITL explícito.
+
+        Sin hitl_request_id aprobado → rechazo.
+        SelfImprove NUNCA puede:
+        - modificar autonomía ceiling
+        - modificar policy state
+        - modificar código
+        - auto-promover a L5
+        """
         cur = self._conn.execute("SELECT validated FROM lessons WHERE id = ?", (lesson_id,))
         row = cur.fetchone()
-        if not row or not row[0]:
-            self.log.warning("self_improve.promote_failed_not_validated", lesson_id=lesson_id)
-            return False
+        if not row:
+            return {"ok": False, "reason": "lesson_not_found"}
+        if not row[0]:
+            return {"ok": False, "reason": "not_validated"}
+        if not hitl_request_id:
+            return {"ok": False, "reason": "hitl_required", "permanent": False}
+
         self._conn.execute("UPDATE lessons SET promoted = 1 WHERE id = ?", (lesson_id,))
         self._conn.commit()
-        self.log.info("self_improve.promoted", lesson_id=lesson_id)
-        return True
+        self.log.info("self_improve.promoted", lesson_id=lesson_id, hitl=hitl_request_id)
+        return {"ok": True, "lesson_id": lesson_id, "hitl_request_id": hitl_request_id}
+
+    def forbidden_actions(self) -> list[str]:
+        """Lista acciones que SelfImprove NUNCA puede hacer (P1 safety)."""
+        return [
+            "modify_code",
+            "modify_autonomy_ceiling",
+            "modify_policy_state",
+            "modify_kill_switch",
+            "elevate_role",
+            "bypass_execution_guard",
+            "self_promote_to_L5",
+            "delete_audit_log",
+            "modify_rbac",
+        ]
 
     def get_unresolved_errors(self, *, limit: int = 20) -> list[dict[str, Any]]:
         cur = self._conn.execute(

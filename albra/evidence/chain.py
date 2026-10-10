@@ -17,10 +17,10 @@ Cada item de evidencia:
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import uuid
-import json
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +93,33 @@ class EvidenceChain:
         self._conn.commit()
 
     async def startup(self) -> None:
+        """Rehidrata estado desde sqlite tras restart (P1)."""
         self.log.info("evidence.startup", db=str(self._db_path))
+        await self._rehydrate()
+
+    async def _rehydrate(self) -> None:
+        """Carga items desde sqlite a memoria para acceso rápido."""
+        if not self._conn:
+            return
+        cur = self._conn.execute(
+            "SELECT id, kind, content, source, obtained_at, version, "
+            "transformation, depends_on, metadata FROM evidence"
+        )
+        rows = cur.fetchall()
+        for r in rows:
+            eid = r[0]
+            self._items[eid] = EvidenceItem(
+                id=eid,
+                kind=r[1],
+                content=r[2],
+                source=r[3] or "",
+                obtained_at=r[4],
+                version=r[5],
+                transformation=r[6],
+                depends_on=json.loads(r[7]) if r[7] else [],
+                metadata=json.loads(r[8]) if r[8] else {},
+            )
+        self.log.info("evidence.rehydrated", items=len(self._items))
 
     async def shutdown(self) -> None:
         if self._conn:

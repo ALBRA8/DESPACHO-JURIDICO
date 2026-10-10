@@ -12,13 +12,13 @@ Permite representar workflows jurídicos complejos como:
 """
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-from albra.observability.logger import get_logger
 from albra.events.bus import EventBus
+from albra.observability.logger import get_logger
 
 
 class NodeKind(str, Enum):
@@ -72,7 +72,7 @@ class WorkflowGraph:
         self._entry: str | None = None
         self._runs: dict[str, GraphRun] = {}
 
-    def add_node(self, node: GraphNode) -> "WorkflowGraph":
+    def add_node(self, node: GraphNode) -> WorkflowGraph:
         if node.name in self._nodes:
             raise ValueError(f"Node '{node.name}' ya existe")
         self._nodes[node.name] = node
@@ -80,7 +80,7 @@ class WorkflowGraph:
             self._entry = node.name
         return self
 
-    def add_edge(self, src: str, dst: str, *, cond: EdgeCond | None = None, label: str = "") -> "WorkflowGraph":
+    def add_edge(self, src: str, dst: str, *, cond: EdgeCond | None = None, label: str = "") -> WorkflowGraph:
         if src not in self._nodes:
             raise ValueError(f"Source node '{src}' no existe")
         if dst not in self._nodes:
@@ -88,7 +88,7 @@ class WorkflowGraph:
         self._edges.setdefault(src, []).append(GraphEdge(src, dst, cond, label))
         return self
 
-    def entry(self, name: str) -> "WorkflowGraph":
+    def entry(self, name: str) -> WorkflowGraph:
         if name not in self._nodes:
             raise ValueError(f"Node '{name}' no existe")
         self._entry = name

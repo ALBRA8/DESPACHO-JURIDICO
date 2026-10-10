@@ -4,8 +4,8 @@ import os
 import tempfile
 
 from albra.config.settings import Settings
-from albra.memory.store import MemoryDV
 from albra.memory.categories import MEMORY_CATEGORIES
+from albra.memory.store import MemoryDV
 
 
 def test_memory_categories_separated():
@@ -60,7 +60,7 @@ def test_memory_invalid_category_rejected():
     mem = MemoryDV(settings)
     try:
         asyncio.run(mem.write("test", category="invalid_category"))
-        assert False, "Debería haber lanzado error"
+        raise AssertionError("Debería haber lanzado error")
     except ValueError:
         pass
 

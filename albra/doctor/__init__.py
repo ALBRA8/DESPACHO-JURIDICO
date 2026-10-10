@@ -1,4 +1,4 @@
 """DOCTOR - Diagnóstico de salud del organismo."""
-from albra.doctor.diagnostic import Doctor, DiagnosticReport
+from albra.doctor.diagnostic import DiagnosticReport, Doctor
 
-__all__ = ["Doctor", "DiagnosticReport"]
+__all__ = ["DiagnosticReport", "Doctor"]

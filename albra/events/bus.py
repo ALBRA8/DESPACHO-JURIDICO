@@ -14,12 +14,12 @@ Eventos:
 """
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from albra.config.settings import Settings
 from albra.observability.logger import get_logger

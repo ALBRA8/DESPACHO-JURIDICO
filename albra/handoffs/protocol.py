@@ -1,28 +1,46 @@
 """
-Handoff Protocol ALBRA.
+Handoff Transport ALBRA - separación Protocol vs Transport.
 
-Permite al agente base ENTREGAR y RECIBIR tareas de otros agentes
-ALBRA en el futuro (especialistas jurídicos como constitucional, civil,
-penal, etc.).
+P1: HandoffProtocol define el envelope.
+Transport = cómo se entrega el envelope entre agentes.
 
-NO se construyen los especialistas ahora - solo el protocolo.
+Transports:
+- InProcessTransport (default, mismo proceso)
+- MockTransport (testing - registra envíos sin enviar)
+- HTTPTransport (futuro - requiere server receptor)
+- QueueTransport (futuro - requiere message queue)
 
-Envelope:
-- task_id
-- from_agent (codename del agente origen)
-- to_agent (codename del destino - ej. "ALBRA-CIVIL-V1")
-- context (resumen, evidencia_ids, memoria_pointers)
-- permissions (heredados / delegados)
-- evidence_ids (lista de evidencia relevante)
-- audit_trail (eventos relevantes)
-- status
+Sin transporte real configurado → in-process con mock.
+NO inventamos endpoints HTTP ni credenciales.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 import uuid
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+from albra.observability.logger import get_logger
+
+
+class HandoffTransport(ABC):
+    """Interface para transportar envelopes entre agentes."""
+
+    name: str = "abstract"
+
+    @abstractmethod
+    async def send(self, envelope: HandoffEnvelope) -> dict[str, Any]:
+        """Envía envelope. Returns: {"ok": bool, "transport_id": str, ...}"""
+
+    @abstractmethod
+    async def receive(self, timeout: float = 5.0) -> list[HandoffEnvelope]:
+        """Recibe envelopes pendientes."""
+
+    async def startup(self) -> None: ...
+    async def shutdown(self) -> None: ...
 
 
 @dataclass
@@ -31,7 +49,7 @@ class HandoffEnvelope:
     task_id: str = ""
     from_agent: str = ""
     to_agent: str = ""
-    intent: str = ""  # qué se quiere que haga el receptor
+    intent: str = ""
     context: dict[str, Any] = field(default_factory=dict)
     permissions: list[str] = field(default_factory=list)
     evidence_ids: list[str] = field(default_factory=list)
@@ -39,6 +57,10 @@ class HandoffEnvelope:
     status: str = "sent"  # sent | received | in_progress | returned | failed
     created_at: float = field(default_factory=time.time)
     received_at: float | None = None
+    execution_id: str | None = None
+    confidence: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -54,20 +76,90 @@ class HandoffEnvelope:
             "status": self.status,
             "created_at": self.created_at,
             "received_at": self.received_at,
+            "execution_id": self.execution_id,
+            "confidence": self.confidence,
+            "warnings": list(self.warnings),
         }
+
+    def to_json(self) -> str:
+        return json.dumps(self.as_dict(), default=str)
+
+    @classmethod
+    def from_json(cls, s: str) -> HandoffEnvelope:
+        d = json.loads(s)
+        return cls(**d)
+
+
+class InProcessTransport(HandoffTransport):
+    """In-process transport - cola en memoria."""
+
+    name = "in_process"
+
+    def __init__(self) -> None:
+        self.log = get_logger("albra.handoff.in_process")
+        self._queue: list[HandoffEnvelope] = []
+        self._replies: dict[str, HandoffEnvelope] = {}
+
+    async def send(self, envelope: HandoffEnvelope) -> dict[str, Any]:
+        self._queue.append(envelope)
+        self.log.info(
+            "handoff.sent",
+            envelope_id=envelope.id,
+            from_agent=envelope.from_agent,
+            to_agent=envelope.to_agent,
+        )
+        return {
+            "ok": True,
+            "transport": self.name,
+            "envelope_id": envelope.id,
+            "queued": True,
+        }
+
+    async def receive(self, timeout: float = 5.0) -> list[HandoffEnvelope]:
+        # Si no hay items, esperar hasta timeout
+        deadline = time.time() + timeout
+        while not self._queue and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        items = list(self._queue)
+        self._queue.clear()
+        return items
+
+    def reply(self, envelope_id: str, reply: HandoffEnvelope) -> None:
+        reply.status = "returned"
+        reply.received_at = time.time()
+        self._replies[envelope_id] = reply
+
+    def get_reply(self, envelope_id: str) -> HandoffEnvelope | None:
+        return self._replies.get(envelope_id)
+
+
+class MockTransport(HandoffTransport):
+    """Mock transport - registra envíos sin entregar."""
+
+    name = "mock"
+
+    def __init__(self) -> None:
+        self.log = get_logger("albra.handoff.mock")
+        self.sent: list[HandoffEnvelope] = []
+        self.fail_on_send = False
+
+    async def send(self, envelope: HandoffEnvelope) -> dict[str, Any]:
+        if self.fail_on_send:
+            return {"ok": False, "error": "mock_fail_configured"}
+        self.sent.append(envelope)
+        return {"ok": True, "transport": self.name, "envelope_id": envelope.id}
+
+    async def receive(self, timeout: float = 5.0) -> list[HandoffEnvelope]:
+        return []
 
 
 class HandoffProtocol:
-    """Protocolo para delegar tareas entre agentes ALBRA.
+    """Protocol - usa Transport para enviar/recibir envelopes."""
 
-    Implementación mínima: el agente base puede preparar handoffs
-    pero como no hay especialistas todavía, los handoffs quedan en
-    estado 'queued' (en cola esperando receptores).
-    """
-
-    def __init__(self) -> None:
-        self._queue: list[HandoffEnvelope] = []
-        self._replies: dict[str, HandoffEnvelope] = {}
+    def __init__(self, *, transport: HandoffTransport | None = None) -> None:
+        self.transport = transport or InProcessTransport()
+        self.log = get_logger("albra.handoff.protocol")
+        self._envelopes: dict[str, HandoffEnvelope] = {}
 
     def prepare(
         self,
@@ -79,6 +171,9 @@ class HandoffProtocol:
         context: dict[str, Any] | None = None,
         permissions: list[str] | None = None,
         evidence_ids: list[str] | None = None,
+        execution_id: str | None = None,
+        confidence: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> HandoffEnvelope:
         env = HandoffEnvelope(
             task_id=task_id,
@@ -88,17 +183,31 @@ class HandoffProtocol:
             context=context or {},
             permissions=permissions or [],
             evidence_ids=evidence_ids or [],
+            execution_id=execution_id,
+            confidence=confidence,
+            warnings=list(warnings or []),
         )
-        self._queue.append(env)
+        self._envelopes[env.id] = env
         return env
 
+    async def send(self, envelope: HandoffEnvelope) -> dict[str, Any]:
+        """Envía via transport."""
+        envelope.status = "sent"
+        return await self.transport.send(envelope)
+
+    async def receive(self, timeout: float = 5.0) -> list[HandoffEnvelope]:
+        return await self.transport.receive(timeout=timeout)
+
+    def get(self, envelope_id: str) -> HandoffEnvelope | None:
+        return self._envelopes.get(envelope_id)
+
     def queued_handoffs(self) -> list[HandoffEnvelope]:
-        return [e for e in self._queue if e.status == "sent"]
+        if hasattr(self.transport, "_queue"):
+            return list(self.transport._queue)
+        return []
 
-    def receive_reply(self, envelope: HandoffEnvelope) -> None:
-        envelope.status = "returned"
-        envelope.received_at = time.time()
-        self._replies[envelope.id] = envelope
+    async def startup(self) -> None:
+        await self.transport.startup()
 
-    def get_reply(self, envelope_id: str) -> HandoffEnvelope | None:
-        return self._replies.get(envelope_id)
+    async def shutdown(self) -> None:
+        await self.transport.shutdown()

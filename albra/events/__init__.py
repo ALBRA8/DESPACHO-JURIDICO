@@ -1,2 +1,2 @@
 """Eventos ALBRA."""
-from albra.events.bus import EventBus, Event
+from albra.events.bus import Event, EventBus

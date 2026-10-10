@@ -1,22 +1,22 @@
 """Memoria ALBRA - memorydv."""
-from albra.memory.store import MemoryDV
 from albra.memory.categories import (
+    MEM_CONFIG,
     MEM_CONVERSATIONAL,
-    MEM_OPERATIONAL,
-    MEM_KNOWLEDGE,
     MEM_DOCUMENTAL,
     MEM_EVIDENCE,
-    MEM_CONFIG,
+    MEM_KNOWLEDGE,
+    MEM_OPERATIONAL,
     MEMORY_CATEGORIES,
 )
+from albra.memory.store import MemoryDV
 
 __all__ = [
-    "MemoryDV",
+    "MEMORY_CATEGORIES",
+    "MEM_CONFIG",
     "MEM_CONVERSATIONAL",
-    "MEM_OPERATIONAL",
-    "MEM_KNOWLEDGE",
     "MEM_DOCUMENTAL",
     "MEM_EVIDENCE",
-    "MEM_CONFIG",
-    "MEMORY_CATEGORIES",
+    "MEM_KNOWLEDGE",
+    "MEM_OPERATIONAL",
+    "MemoryDV",
 ]

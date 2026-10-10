@@ -1,12 +1,11 @@
 """Tests de tools, capabilities y MCP."""
 import asyncio
 
+from albra.capabilities.registry import CapabilityRegistry
 from albra.config.settings import Settings
-from albra.tools.registry import ToolRegistry
-from albra.tools.base import Tool, ToolResult
-from albra.capabilities.registry import CapabilityRegistry, Capability
-from albra.mcp.server import MCPServer
 from albra.mcp.protocol import MCPRequest
+from albra.mcp.server import MCPServer
+from albra.tools.registry import ToolRegistry
 
 
 def test_tools_registered_on_init():
@@ -95,13 +94,48 @@ def test_mcp_server_tools_list():
 
 
 def test_mcp_server_tools_call():
+    """V1.6 P1: MCP tools_call SIN guard cableado → DENY explícito."""
     tr = ToolRegistry(Settings())
     srv = MCPServer(Settings())
+    # Sin security perimeter → MCP debe DENY
     srv.wire(tool_registry=tr, capability_registry=None)
     req = MCPRequest(method="tools/call", params={"name": "clock", "arguments": {}})
     resp = asyncio.run(srv.handle(req))
-    assert resp.error is None
-    assert resp.result["ok"] is True
+    # Sin execution_guard → DENY (fail-closed)
+    assert resp.result is None or resp.result.get("ok") is False
+
+
+def test_mcp_server_tools_call_with_guard():
+    """V1.6 P1: MCP tools_call CON guard cableado → ejecuta vía guard."""
+    tr = ToolRegistry(Settings())
+    srv = MCPServer(Settings())
+    import tempfile
+
+    from albra.evidence.legal_gate import LegalGate
+    from albra.security.autonomy import AutonomyController
+    from albra.security.execution_guard import ExecutionGuard
+    from albra.security.policy_state import PolicyEngineState
+    from albra.security.rbac import has_permission
+    with tempfile.TemporaryDirectory() as tmp:
+        ps = PolicyEngineState(f"{tmp}/ps.db")
+        srv.wire(
+            tool_registry=tr,
+            capability_registry=None,
+            execution_guard=ExecutionGuard(),
+            policy_state=ps,
+            autonomy_controller=AutonomyController(),
+            rbac_check_fn=has_permission,
+            legal_gate=LegalGate(),
+        )
+        req = MCPRequest(
+            method="tools/call",
+            params={"name": "clock", "arguments": {}, "user": "test", "role": "admin"},
+        )
+        resp = asyncio.run(srv.handle(req))
+        # Con role=admin y guard config OK → debería pasar
+        assert resp.error is None
+        assert resp.result.get("ok") is True
+        ps.close()
 
 
 def test_mcp_server_method_not_found():

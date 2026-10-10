@@ -19,7 +19,6 @@ from typing import Any
 
 from albra.observability.logger import get_logger
 
-
 # Niveles de autonomía
 LEVELS: tuple[str, ...] = (
     "L0_OBSERVE",

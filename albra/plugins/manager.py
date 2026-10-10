@@ -15,12 +15,13 @@ Casos de uso:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
+from albra.capabilities.registry import Capability
 from albra.observability.logger import get_logger
 from albra.tools.base import Tool, ToolResult
-from albra.capabilities.registry import Capability
 
 
 @dataclass
@@ -51,8 +52,8 @@ class PluginManifest:
 @dataclass
 class PluginInstance:
     manifest: PluginManifest
-    register: Callable[["PluginContext"], Awaitable[dict[str, Any]]]
-    unregister: Callable[["PluginContext"], Awaitable[dict[str, Any]]] | None = None
+    register: Callable[[PluginContext], Awaitable[dict[str, Any]]]
+    unregister: Callable[[PluginContext], Awaitable[dict[str, Any]]] | None = None
     state: dict[str, Any] = field(default_factory=dict)
 
 

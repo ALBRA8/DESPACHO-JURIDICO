@@ -25,9 +25,10 @@ def info() -> None:
 @main.command()
 def chat() -> None:
     """Modo conversacional por terminal."""
-    from albra.identity.agent import get_agent
-    from albra.comms.base import ChannelMessage
     import time
+
+    from albra.comms.base import ChannelMessage
+    from albra.identity.agent import get_agent
     agent = get_agent()
     click.echo(f"\n{AGENT_MANIFEST.name} v{AGENT_MANIFEST.version}")
     click.echo("Escribe 'salir' para terminar.\n")
@@ -35,7 +36,6 @@ def chat() -> None:
     async def _run() -> None:
         await agent.boot()
         comms = agent.organs["comms"]
-        text_adapter = comms._adapters.get("text")
 
         async def handler(message):
             r = await agent.process(message.text, channel=message.channel, user=message.user)

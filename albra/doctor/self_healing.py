@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import Any
 
 from albra.config.settings import Settings
+from albra.doctor.diagnostic import Doctor
 from albra.observability.logger import get_logger
-from albra.doctor.diagnostic import Doctor, CheckResult
 
 
 @dataclass

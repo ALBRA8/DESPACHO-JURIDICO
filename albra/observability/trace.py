@@ -46,7 +46,7 @@ class Tracer:
     def __init__(self) -> None:
         self._spans: list[Span] = []
 
-    def span(self, name: str, **attrs: Any) -> "span":  # type: ignore[name-defined]
+    def span(self, name: str, **attrs: Any) -> span:  # type: ignore[name-defined]
         parent = _current_trace.get()
         parent_id = parent["span_id"] if parent else None
         sp = Span(name, parent_id=parent_id, **attrs)

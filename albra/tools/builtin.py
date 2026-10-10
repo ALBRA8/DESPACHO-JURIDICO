@@ -11,6 +11,7 @@ import math
 from typing import Any
 
 from albra.tools.base import Tool, ToolResult
+from albra.tools.registry import ToolRegistry
 
 
 async def _clock_handler(input_data: dict[str, Any], *, user: str) -> ToolResult:
@@ -38,7 +39,7 @@ async def _calculator_handler(input_data: dict[str, Any], *, user: str) -> ToolR
         return ToolResult(ok=False, error="Expresión vacía tras sanitización")
     try:
         # Eval controlado - sin builtins
-        value = eval(safe, {"__builtins__": {}}, {"math": math})  # noqa: S307
+        value = eval(safe, {"__builtins__": {}}, {"math": math})
     except Exception as e:  # noqa: BLE001
         return ToolResult(ok=False, error=f"No pude calcular: {e}")
     return ToolResult(ok=True, value=value, metadata={"expression": expr})
@@ -61,7 +62,7 @@ async def _memory_lookup_handler(input_data: dict[str, Any], *, user: str) -> To
     )
 
 
-def register_builtin_tools(registry: "ToolRegistry") -> None:
+def register_builtin_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
             name="clock",
