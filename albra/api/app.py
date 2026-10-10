@@ -39,8 +39,8 @@ async def _get_agent():
 
 
 async def require_auth(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    request: Request = None,
 ) -> dict[str, Any]:
     """Dependency FastAPI - autentica via Bearer token.
 
