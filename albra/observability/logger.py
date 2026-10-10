@@ -54,9 +54,9 @@ class _Logger:
     def __init__(self, name: str) -> None:
         self._logger = logging.getLogger(name)
 
-    def _log(self, level: int, msg: str, **kwargs: Any) -> None:
+    def _log(self, lvl: int, msg: str, **kwargs: Any) -> None:
         extra = {"_albra_extra": kwargs}
-        self._logger.log(level, msg, extra=extra, stacklevel=3)
+        self._logger.log(lvl, msg, extra=extra, stacklevel=3)
 
     def debug(self, msg: str, **kwargs: Any) -> None:
         self._log(logging.DEBUG, msg, **kwargs)
