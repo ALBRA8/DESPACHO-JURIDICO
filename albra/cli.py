@@ -26,18 +26,22 @@ def info() -> None:
 def chat() -> None:
     """Modo conversacional por terminal."""
     from albra.identity.agent import get_agent
+    from albra.comms.base import ChannelMessage
+    import time
     agent = get_agent()
     click.echo(f"\n{AGENT_MANIFEST.name} v{AGENT_MANIFEST.version}")
     click.echo("Escribe 'salir' para terminar.\n")
 
     async def _run() -> None:
         await agent.boot()
-        # Wire comms
-        text_adapter = agent.organs["comms"]._adapters.get("text")
+        comms = agent.organs["comms"]
+        text_adapter = comms._adapters.get("text")
+
         async def handler(message):
             r = await agent.process(message.text, channel=message.channel, user=message.user)
             return r["reply"]
-        agent.organs["comms"].set_agent_handler(handler)
+
+        comms.set_agent_handler(handler)
         while True:
             try:
                 msg = click.prompt(">", type=str)
@@ -45,19 +49,12 @@ def chat() -> None:
                 break
             if msg.strip().lower() in ("salir", "exit", "quit"):
                 break
-            text_adapter.push_from_stdin("cli_user", msg)
-            await agent.organs["comms"].route_in(
-                type(text_adapter)._class_call(msg) if False else _make_msg("text", "cli_user", msg)
-            )
+            cm = ChannelMessage(channel="text", user="cli_user", text=msg, ts=time.time())
+            result = await comms.route_in(cm)
+            click.echo(f"\n[ALBRA] {result['reply']}\n")
         await agent.shutdown()
 
     asyncio.run(_run())
-
-
-def _make_msg(channel: str, user: str, text: str):
-    import time
-    from albra.comms.base import ChannelMessage
-    return ChannelMessage(channel=channel, user=user, text=text, ts=time.time())
 
 
 @main.command()
@@ -123,7 +120,7 @@ def tools() -> None:
         await agent.boot()
         tr = agent.organs["tools"]
         for t in tr.list():
-            click.echo(f"  - {t['name']:18s} risk={t['risk']:6s} cat={t['category']:8s} → {t['description']}")
+            click.echo(f"  - {t['name']:22s} risk={t['risk']:6s} cat={t['category']:8s} → {t['description']}")
         await agent.shutdown()
 
     asyncio.run(_run())
@@ -145,6 +142,87 @@ def memory() -> None:
 
 
 @main.command()
+def firewall() -> None:
+    """Lista las políticas del Action Firewall."""
+    from albra.security.firewall.policy import FIREWALL_POLICIES
+    click.echo("Políticas del Action Firewall:")
+    for name, p in FIREWALL_POLICIES.items():
+        click.echo(f"  - {name:30s} risk={p.risk:8s} hitl={p.requires_hitl}")
+    click.echo(f"\nTotal: {len(FIREWALL_POLICIES)} políticas")
+
+
+@main.command()
+def policies() -> None:
+    """Lista las políticas declarativas (Policy-as-Code)."""
+    from albra.security.policy import PolicyEngine
+    eng = PolicyEngine()
+    for p in eng.list():
+        click.echo(f"  - [{p['id']:12s}] {p['name']:35s} rule: {p['rule']:40s} action: {p['action']}")
+
+
+@main.command()
+def manifests() -> None:
+    """Lista los manifests de los órganos (role/goal/backstory)."""
+    from albra.identity.organ_manifests import list_organ_manifests
+    for m in list_organ_manifests():
+        click.echo(f"\n[{m['name']}]")
+        click.echo(f"  Role: {m['role']}")
+        click.echo(f"  Goal: {m['goal']}")
+        click.echo(f"  Backstory: {m['backstory']}")
+
+
+@main.command()
+def sops() -> None:
+    """Lista los SOPs jurídicos disponibles."""
+    from albra.workflows.sops import list_sops
+    click.echo("SOPs jurídicos disponibles:")
+    for s in list_sops():
+        click.echo(f"  - {s['name']:30s} steps={s['steps_count']} hitl_steps={s['hitl_steps']} "
+                   f"≈{s['estimated_total_minutes']}min total")
+
+
+@main.command()
+def jurisdictions() -> None:
+    """Lista las jurisdicciones soportadas en el catálogo MCP."""
+    from albra.mcp.jurisdictions import JurisdictionCatalog
+    cat = JurisdictionCatalog()
+    click.echo("Catálogo MCP multi-jurisdicción:")
+    for j in cat.list():
+        click.echo(f"  - {j['jurisdiction']:5s} {j['name']:25s} url={j['url']} - {j['description']}")
+
+
+@main.command()
+def debate() -> None:
+    """Demo del debate adversarial."""
+    from albra.reasoning.debate import AdversarialDebate
+
+    async def _run() -> None:
+        click.echo("Escribí una pregunta jurídica para el debate:")
+        q = click.prompt("Pregunta", type=str)
+        debate = AdversarialDebate(get_agent_settings(), provider=None)
+        result = await debate.run_debate(q)
+        for arg in result.arguments:
+            click.echo(f"\n[{arg.role}]")
+            click.echo(arg.argument)
+        click.echo("\n[MAGISTRADO - Dictamen]")
+        click.echo(result.ruling)
+
+    asyncio.run(_run())
+
+
+@main.command()
+def audit_verify() -> None:
+    """Verifica la integridad del audit log con hash chain."""
+    from albra.audit.tamper_evident import TamperEvidentAudit
+    from albra.config.settings import Settings
+    s = Settings()
+    audit = TamperEvidentAudit(s.audit_path)
+    result = audit.verify_chain()
+    click.echo(json.dumps(result, indent=2))
+    click.echo(f"\nFingerprint actual: {audit.fingerprint()}")
+
+
+@main.command()
 def serve() -> None:
     """Inicia API HTTP (si fastapi está instalado)."""
     try:
@@ -154,6 +232,11 @@ def serve() -> None:
         sys.exit(1)
     from albra.api.app import app
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+def get_agent_settings():
+    from albra.config.settings import Settings
+    return Settings()
 
 
 if __name__ == "__main__":
