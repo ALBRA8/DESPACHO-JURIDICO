@@ -114,6 +114,8 @@ class LegalIngestionPipeline:
         subject: str = "",
         articles: list[dict[str, Any]] | None = None,
         provenance: dict[str, Any] | None = None,
+        reach: str | None = None,
+        force: str | None = None,
     ) -> IngestionResult:
         """Ejecuta todo el pipeline."""
         result = IngestionResult(document_id="", source_id=source_id, ok=False)
@@ -145,9 +147,11 @@ class LegalIngestionPipeline:
             ))
 
             # 4. NORMALIZE
+            # P1 FIX: invalid document_type → FAIL-CLOSED (not just warning)
             if document_type not in DOCUMENT_TYPES:
-                result.warnings.append(
-                    f"document_type '{document_type}' not in standard catalog"
+                raise ValueError(
+                    f"document_type '{document_type}' is not a valid legal document type. "
+                    f"Valid types: {DOCUMENT_TYPES}. Ingestion rejected (fail-closed)."
                 )
             # P1-4 FIX: validar authority - reject None, "", whitespace-only
             if not authority or not authority.strip():
@@ -276,7 +280,9 @@ class LegalIngestionPipeline:
                     effective_until=effective_until,
                     status=normalized_status,
                     subject=subject,
-                    official_source=True,
+                    # P1 FIX: official_source derived from source_tier, NOT hardcoded
+                    # S0/S1 → official_source=True; S2/S3/S4 → False
+                    official_source=(source_tier in (SourceTier.S0_PRIMARY_SUPERIOR, SourceTier.S1_OFFICIAL)),
                     content_hash=content_hash,
                     retrieval_timestamp=time.time(),
                     provenance=provenance_data,
@@ -296,9 +302,14 @@ class LegalIngestionPipeline:
                     source_url=source_url,
                     source_tier=source_tier,
                     authority=authority,
+                    # P1 FIX: official_source derived from tier
+                    official_source=(source_tier in (SourceTier.S0_PRIMARY_SUPERIOR, SourceTier.S1_OFFICIAL)),
                     content_hash=content_hash,
                     retrieval_timestamp=time.time(),
                     provenance=provenance_data,
+                    # P1 FIX: propagate reach+force from ingestion params
+                    reach=reach or "unknown",
+                    force=force or "desconocido",
                 )
                 j_id = await self.retriever.provider.index_jurisprudence(j)
                 result.jurisprudence_id = j_id
@@ -308,7 +319,7 @@ class LegalIngestionPipeline:
                     id=document_id,
                     author=authority,
                     title=title,
-                    publication_date=date_issued,
+                    publication_year=date_issued.year if date_issued else None,
                     text=parsed_text,
                     source_url=source_url,
                     source_tier=source_tier,

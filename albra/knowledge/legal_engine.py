@@ -252,8 +252,23 @@ class LegalKnowledgeEngine:
             ))
             return blocks
 
-        # Primary evidence - literal text
-        primary = verification.candidates[0]
+        # P0 FIX: Use verification.primary_evidence_id — NOT candidates[0]
+        # If primary_evidence_id is None or not found → fail-closed (abstention)
+        primary = None
+        if verification.primary_evidence_id:
+            primary = next(
+                (c for c in verification.candidates if c.source_id == verification.primary_evidence_id),
+                None,
+            )
+        if primary is None:
+            # FAIL-CLOSED: no primary evidence identified
+            blocks.append(LegalResponseBlock(
+                content_type="abstencion",
+                text="No se pudo identificar la evidencia primaria. No se emitirá una afirmación sin verificación.",
+                confidence=0.0,
+            ))
+            return blocks
+
         blocks.append(LegalResponseBlock(
             content_type="texto_normativo" if primary.document_type in ("ley", "decreto", "codigo", "estatuto", "constitucion") else "jurisprudencia" if primary.document_type in ("sentencia", "auto") else "doctrina",
             text=primary.snippet,
