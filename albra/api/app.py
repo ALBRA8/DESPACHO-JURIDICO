@@ -1,4 +1,12 @@
-"""FastAPI app - V1.6 con auth + RBAC (P1)."""
+"""FastAPI app - V1.6 FINAL con JWT HMAC auth (sin hardcoded secrets).
+
+Pipeline:
+HTTP → Authentication (JWT) → Identity → RBAC → Policy → ExecutionGuard → Agent
+
+NO hardcoded service tokens.
+NO user:password como bearer.
+Token JWT firmado con ALBRA_JWT_SECRET (configuración externa).
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -12,6 +20,7 @@ from albra.identity.agent import get_agent
 from albra.identity.manifest import AGENT_MANIFEST
 from albra.security.auth import SecurityGate
 from albra.security.rbac import has_permission
+from albra.security.tokens import issue_token, verify_token
 
 app = FastAPI(
     title=AGENT_MANIFEST.name,
@@ -24,72 +33,58 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 _agent: Any = None
 _security_gate: SecurityGate | None = None
+_settings: Settings | None = None
 
 
 async def _get_agent():
-    global _agent, _security_gate
+    global _agent, _security_gate, _settings
     if _agent is None:
         _agent = get_agent()
         await _agent.boot()
-        s = Settings()
-        _security_gate = SecurityGate(s)
-        # Wire security gate como órgano del agent
+        _settings = Settings()
+        _security_gate = SecurityGate(_settings)
         _agent.organs["security"] = _security_gate
-    return _agent, _security_gate
+    return _agent, _security_gate, _settings
 
 
 async def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict[str, Any]:
-    """Dependency FastAPI - autentica via Bearer token.
+    """Dependency FastAPI - autentica via JWT Bearer token.
+
+    SIN hardcoded service tokens. SIN user:password.
+    Solo JWT firmado con ALBRA_JWT_SECRET.
 
     Returns:
         dict con user, role, authenticated
     Raises:
         HTTPException 401 si no autenticado.
     """
-    _, gate = await _get_agent()
+    _, gate, _ = await _get_agent()
     if not credentials:
-        # Allow service identity for internal calls via X-Service-Token header
-        if request:
-            service_token = request.headers.get("X-Service-Token")
-            if service_token and service_token == "albra-internal-service":
-                return {"user": "service", "role": "admin", "authenticated": True}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Bearer token required",
+            detail="Bearer JWT token required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # Token format: <user>:<password> - simple pero funcional para dev
-    # PRODUCCIÓN: usar JWT firmado
-    try:
-        token = credentials.credentials
-        if ":" not in token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token format: user:password",
-            )
-        user, password = token.split(":", 1)
-        ctx = await gate.login(user, password)
-        if not ctx.authenticated:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials",
-            )
-        return {
-            "user": ctx.user,
-            "role": ctx.role,
-            "authenticated": True,
-            "session": ctx.session,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
+
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Auth error: {e}",
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+
+    return {
+        "user": payload["sub"],
+        "role": payload["role"],
+        "authenticated": True,
+        "session": f"jwt-{payload['iat']}",
+        "token_payload": payload,
+    }
 
 
 def require_permission(permission: str):
@@ -106,15 +101,15 @@ def require_permission(permission: str):
 
 # --- Models ---
 
+class LoginRequest(BaseModel):
+    user: str
+    password: str
+
+
 class ChatRequest(BaseModel):
     message: str
     user: str = "api_user"
     channel: str = "text"
-
-
-class LoginRequest(BaseModel):
-    user: str
-    password: str
 
 
 # --- Endpoints ---
@@ -127,7 +122,7 @@ async def root() -> dict[str, Any]:
 
 @app.get("/health")
 async def health(auth: dict = Depends(require_permission("doctor.run"))) -> dict[str, Any]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     doc = agent.organs["doctor"]
     report = await doc.diagnose(scope="all")
     return report.as_dict()
@@ -138,8 +133,7 @@ async def chat(
     req: ChatRequest,
     auth: dict = Depends(require_permission("tools.invoke_low")),
 ) -> dict[str, Any]:
-    agent, _ = await _get_agent()
-    # RBAC: usar el rol del authenticated user
+    agent, _, _ = await _get_agent()
     return await agent.process(
         req.message,
         channel=req.channel,
@@ -150,25 +144,25 @@ async def chat(
 
 @app.get("/tools")
 async def list_tools(auth: dict = Depends(require_permission("tools.invoke"))) -> list[dict[str, Any]]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return agent.organs["tools"].list()
 
 
 @app.get("/capabilities")
 async def list_capabilities(auth: dict = Depends(require_permission("tools.invoke"))) -> list[dict[str, Any]]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return agent.organs["capabilities"].list()
 
 
 @app.get("/organs")
 async def list_organs(auth: dict = Depends(require_permission("doctor.run"))) -> list[str]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return list(agent.organs.keys())
 
 
 @app.get("/memory/stats")
 async def memory_stats(auth: dict = Depends(require_permission("memory.read"))) -> dict[str, Any]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return agent.organs["memory"].stats()
 
 
@@ -177,7 +171,7 @@ async def audit_tail(
     limit: int = 50,
     auth: dict = Depends(require_permission("security.audit_read")),
 ) -> list[dict[str, Any]]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return agent.organs["audit"].read(limit=limit)
 
 
@@ -186,25 +180,31 @@ async def evidence_list(
     limit: int = 50,
     auth: dict = Depends(require_permission("tools.invoke")),
 ) -> list[dict[str, Any]]:
-    agent, _ = await _get_agent()
+    agent, _, _ = await _get_agent()
     return agent.organs["evidence"].list(limit=limit)
 
 
 @app.post("/login")
 async def login(req: LoginRequest) -> dict[str, Any]:
-    """Endpoint público de login - devuelve token de sesión."""
-    _, gate = await _get_agent()
+    """Endpoint público de login - devuelve JWT firmado tras auth real."""
+    _, gate, _ = await _get_agent()
     ctx = await gate.login(req.user, req.password)
     if not ctx.authenticated:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+    # Emite JWT firmado con ALBRA_JWT_SECRET
+    token = issue_token(
+        subject=ctx.user,
+        role=ctx.role,
+        extra_claims={"session": ctx.session},
+    )
     return {
         "user": ctx.user,
         "role": ctx.role,
         "session": ctx.session,
-        # Para dev: token = "user:password" para usar en Bearer
-        # PRODUCCIÓN: devolver JWT firmado
-        "bearer_token": f"{req.user}:{req.password}",
+        "token": token,
+        "token_type": "Bearer",
+        "expires_in": 86400,
     }

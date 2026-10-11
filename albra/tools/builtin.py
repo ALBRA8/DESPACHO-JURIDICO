@@ -15,7 +15,13 @@ from albra.tools.registry import ToolRegistry
 
 
 async def _clock_handler(input_data: dict[str, Any], *, user: str) -> ToolResult:
-    now = dt.datetime.now(dt.UTC)
+    # Python 3.10 compat: dt.UTC solo existe en 3.11+, usar timezone.utc
+    try:
+        # Python 3.11+
+        now = dt.datetime.now(dt.UTC)  # type: ignore[attr-defined]
+    except AttributeError:
+        # Python 3.10
+        now = dt.datetime.now(dt.timezone.utc)
     return ToolResult(
         ok=True,
         value={
