@@ -19,18 +19,9 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
-# Add corpus pilot to path
-from albra.knowledge.colombia.corpus_pilot.constitution.constitucion_1991 import CONSTITUCION_1991
-from albra.knowledge.colombia.corpus_pilot.jurisprudence.jurisprudencia_real import (
-    DOCTRINA_1,
-    SENTENCIA_AR,
-    SENTENCIA_C_251_2002,
-    SENTENCIA_T_760_2008,
-)
-from albra.knowledge.colombia.corpus_pilot.legislation.leyes_reales import (
-    LEY_80_1993,
-    LEY_100_1993,
-    LEY_1480_2011,
+# V1.1: REAL corpus from verified official sources
+from albra.knowledge.colombia.corpus_pilot.real_corpus_v11 import (
+    ALL_DOCUMENTS as REAL_DOCUMENTS,
 )
 from albra.knowledge.ingestion import LegalIngestionPipeline
 from albra.knowledge.retrieval import HybridRetriever
@@ -40,17 +31,8 @@ from albra.observability.logger import get_logger
 
 log = get_logger("albra.corpus_pilot")
 
-# All documents to ingest
-ALL_DOCUMENTS = [
-    ("constitution", CONSTITUCION_1991),
-    ("legislation", LEY_100_1993),
-    ("legislation", LEY_80_1993),
-    ("legislation", LEY_1480_2011),
-    ("jurisprudence", SENTENCIA_C_251_2002),
-    ("jurisprudence", SENTENCIA_T_760_2008),
-    ("foreign", SENTENCIA_AR),
-    ("doctrine", DOCTRINA_1),
-]
+# All documents to ingest (V1.1: only REAL verified content)
+ALL_DOCUMENTS = REAL_DOCUMENTS
 
 
 def _parse_date(s: str | None) -> date | None:

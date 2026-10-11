@@ -45,10 +45,10 @@ def corpus_retriever():
 
 class TestTemporalidad:
     def test_norma_vigente_recuperable(self, corpus_retriever):
-        """Ley 1480 de 2011 vigente → recuperable."""
+        """Ley 100 de 1993 vigente → recuperable."""
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
-            q = RetrievalQuery(query_type="exact", norm_number="Ley 1480", jurisdiction="CO")
+            q = RetrievalQuery(query_type="exact", norm_number="Ley 100", jurisdiction="CO")
             result = await corpus_retriever.retrieve(q)
             assert result.total_found >= 1
             assert all(c.is_current for c in result.candidates)
@@ -171,7 +171,8 @@ class TestRetrieval:
 
 class TestJurisprudencia:
     def test_sentencia_co_recuperable(self, corpus_retriever):
-        """Sentencia C-251/2002 recuperable con query CO."""
+        """V1.1: No jurisprudence in corpus (sentencias rejected - content not fetchable)."""
+        pytest.skip("V1.1: No jurisprudence in corpus (sentencias rejected - content not fetchable from corteconstitucional.gov.co)")
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
@@ -188,7 +189,8 @@ class TestJurisprudencia:
         asyncio.run(_run())
 
     def test_sentencia_ar_excluida_en_co(self, corpus_retriever):
-        """Sentencia AR NO aparece en query CO."""
+        """V1.1: No AR documents (synthetic eliminated)."""
+        pytest.skip("V1.1: No AR documents in corpus (synthetic was eliminated)")
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
@@ -204,7 +206,8 @@ class TestJurisprudencia:
         asyncio.run(_run())
 
     def test_reach_force_preserved(self, corpus_retriever):
-        """reach/force preservados en retrieval."""
+        """V1.1: No jurisprudence with reach/force in corpus."""
+        pytest.skip("V1.1: No jurisprudence in corpus (sentencias rejected)")
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
@@ -406,15 +409,15 @@ class TestE2E:
 
 class TestSourceAndDocument:
     def test_corpus_stats(self, corpus_retriever):
-        """4 normas, 19 artículos, 3 jurisprudencia, 1 doctrina."""
+        """V1.1: 3 normas, 12 artículos reales, 0 jurisprudencia, 0 doctrina."""
         stats = corpus_retriever.provider.stats()
-        assert stats["norms"] == 4
-        assert stats["articles"] == 19
-        assert stats["jurisprudence"] == 3
-        assert stats["doctrine"] == 1
+        assert stats["norms"] == 3
+        assert stats["articles"] == 12
+        assert stats["jurisprudence"] == 0  # V1.1: sentencias rejected (content not fetchable)
+        assert stats["doctrine"] == 0  # V1.1: doctrine rejected (was synthetic)
 
     def test_dedup_preserves_multiple_articles(self, corpus_retriever):
-        """Constitución tiene 10 artículos → todos recuperables."""
+        """V1.1: Constitución tiene 6 artículos reales → todos recuperables."""
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
@@ -423,21 +426,21 @@ class TestSourceAndDocument:
                 jurisdiction="CO",
             )
             result = await corpus_retriever.retrieve(q)
-            assert result.total_found == 10, f"Expected 10 articles, got {result.total_found}"
+            assert result.total_found == 6, f"Expected 6 articles, got {result.total_found}"
         asyncio.run(_run())
 
     def test_all_jurisdictions_present(self, corpus_retriever):
-        """CO y AR presentes en corpus."""
+        """V1.1: Only CO present (AR was synthetic → eliminated)."""
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             # CO
-            q_co = RetrievalQuery(query_text="salud", query_type="semantic", jurisdiction="CO", top_k=20, min_score=0.0)
+            q_co = RetrievalQuery(query_text="seguridad social", query_type="semantic", jurisdiction="CO", top_k=20, min_score=0.0)
             r_co = await corpus_retriever.retrieve(q_co)
-            assert r_co.total_found >= 1
-            # AR
+            assert r_co.total_found >= 1, "Should find CO norms"
+            # AR should return 0 (no AR documents in V1.1)
             q_ar = RetrievalQuery(query_text="salud", query_type="semantic", jurisdiction="AR", top_k=20, min_score=0.0)
             r_ar = await corpus_retriever.retrieve(q_ar)
-            assert r_ar.total_found >= 1, "Should find AR jurisprudence when querying AR"
+            assert r_ar.total_found == 0, "V1.1 has no AR documents (synthetic was eliminated)"
         asyncio.run(_run())
 
 
@@ -468,7 +471,8 @@ class TestAdversarial:
         asyncio.run(_run())
 
     def test_argentine_not_in_co(self, corpus_retriever):
-        """Sentencia argentina NO aparece en consulta CO."""
+        """V1.1: No AR documents (synthetic eliminated)."""
+        pytest.skip("V1.1: No AR documents in corpus")
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
@@ -483,7 +487,8 @@ class TestAdversarial:
         asyncio.run(_run())
 
     def test_missing_reach_force_not_inferred(self, corpus_retriever):
-        """Doctrina (sin reach/force) → no se infiere vinculante."""
+        """V1.1: No doctrine in corpus (was synthetic)."""
+        pytest.skip("V1.1: No doctrine in corpus (was synthetic, eliminated)")
         from albra.knowledge.retrieval import RetrievalQuery
         async def _run():
             q = RetrievalQuery(
