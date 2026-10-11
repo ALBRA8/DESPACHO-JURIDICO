@@ -1,7 +1,7 @@
 """Script de demo - prueba el agente ALBRA end-to-end."""
 import asyncio
-import sys
 import os
+import sys
 
 # Asegurar que albra esté en el path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,27 +26,27 @@ async def main():
     # Demo 1: saludo
     print("\n--- DEMO 1: Saludo ---")
     r = await agent.process("Hola bro, qué más!", channel="text", user="test_user")
-    print(f"User: Hola bro, qué más!")
+    print("User: Hola bro, qué más!")
     print(f"ALBRA: {r['reply']}")
     print(f"(authorized={r['authorized']}, tools_used={r['tools_used']}, memory_used={r['memory_used']})")
 
     # Demo 2: pregunta legal (debe rehusar)
     print("\n--- DEMO 2: Pregunta legal sin conocimiento cargado ---")
     r = await agent.process("¿Qué dice el artículo 25 del código civil colombiano?", user="test_user")
-    print(f"User: ¿Qué dice el artículo 25 del código civil colombiano?")
+    print("User: ¿Qué dice el artículo 25 del código civil colombiano?")
     print(f"ALBRA: {r['reply']}")
 
     # Demo 3: uso de tool
     print("\n--- DEMO 3: Uso de herramienta ---")
     r = await agent.process("calcula 7 * 8", user="test_user")
-    print(f"User: calcula 7 * 8")
+    print("User: calcula 7 * 8")
     print(f"ALBRA: {r['reply']}")
     print(f"(tools_used: {r['tools_used']})")
 
     # Demo 4: estado del agente
     print("\n--- DEMO 4: Health check ---")
     r = await agent.process("¿cuál es el estado del agente?", user="test_user")
-    print(f"User: ¿cuál es el estado del agente?")
+    print("User: ¿cuál es el estado del agente?")
     print(f"ALBRA: {r['reply']}")
 
     # Demo 5: Doctor
@@ -66,7 +66,7 @@ async def main():
 
     # Demo 7: Plugin contract redlining
     print("\n--- DEMO 7: Plugin Contract Redlining ---")
-    from albra.plugins.manager import PluginManager, CONTRACT_REDLINE_PLUGIN
+    from albra.plugins.manager import CONTRACT_REDLINE_PLUGIN, PluginManager
     pm = PluginManager()
     await pm.register(CONTRACT_REDLINE_PLUGIN, agent=agent)
     print("Plugins cargados:")
