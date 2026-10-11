@@ -466,14 +466,14 @@ def test_11_conflict_detection():
         source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
         authority="Corte Constitucional", document_type="sentencia",
         snippet="text 1", is_current=True, score=0.8,
-        provenance={"binding": True, "effect": "vinculante"},
+        provenance={"force": "vinculante"},
     )
     c2 = EvidenceCandidate(
         source_id="c2", document_id="d2",
         source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
         authority="Corte Suprema", document_type="sentencia",
         snippet="text 2", is_current=True, score=0.7,
-        provenance={"binding": True, "effect": "vinculante"},
+        provenance={"force": "vinculante"},
     )
     result = RetrievalResult(candidates=[c1, c2])
     v = LegalVerifier().verify(result)
@@ -564,7 +564,8 @@ def test_p1_1_jurisprudence_effect_field():
         file_number="C-001/2024", decision_date=date(2024, 1, 1),
         effect="erga_omnes",
     )
-    assert j_erga.effect == "erga_omnes"
+    assert j_erga.reach == "erga_omnes"
+    assert j_erga.force == "vinculante"
     assert j_erga.binding is True  # derived
 
     j_inter = Jurisprudence(
@@ -572,7 +573,7 @@ def test_p1_1_jurisprudence_effect_field():
         file_number="12345", decision_date=date(2024, 1, 1),
         effect="inter_partes",
     )
-    assert j_inter.effect == "inter_partes"
+    assert j_inter.reach == "inter_partes"
     assert j_inter.binding is False  # derived
 
 

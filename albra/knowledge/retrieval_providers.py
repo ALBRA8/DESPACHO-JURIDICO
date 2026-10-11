@@ -288,9 +288,10 @@ class InMemoryRetrievalProvider(RetrievalProvider):
                 "file_number": j.file_number,
                 "decision_date": str(j.decision_date) if j.decision_date else None,
                 "ponente": j.ponente,
-                "effect": j.effect,  # P1-1: effect en vez de binding:bool
-                "binding": j.binding,  # derived para compat
-                "jurisdiction": j.jurisdiction,  # P1-3
+                "reach": j.reach,        # B1: alcance
+                "force": j.force,        # B1: fuerza precedencial
+                "binding": j.binding,     # derived para compat
+                "jurisdiction": j.jurisdiction,
             },
         )
 

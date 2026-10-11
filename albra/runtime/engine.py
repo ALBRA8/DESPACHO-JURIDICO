@@ -483,15 +483,17 @@ class Runtime:
             pass  # fallback a keyword matching si classifier falla
 
         # 4. Fallback: keywords con contexto (no standalone "ley")
-        # BLOQUE 5: "ley" solo no es suficiente — requiere contexto jurídico
+        # B2 HARDENING: eliminar "según la ley" y "qué dice la ley" genéricos
+        # que causan false positives con "según la ley de Ohm"
         legal_context_keywords = (
             "decreto", "código", "codigo", "estatuto", "constitución",
             "constitucion", "jurisprudencia", "sentencia", "precedente",
             "corte constitucional", "corte suprema", "consejo de estado",
             "vigente", "derogad", "magistrado", "ponente",
             "expediente", "radicado", "parágrafo", "disposición",
-            "reglamento", "ley número", "de la ley número", "según la ley",
-            "qué dice la ley", "que dice la ley",
+            "reglamento", "ley número", "de la ley número",
+            # B2: removed "según la ley" and "qué dice la ley" — too generic
+            # These matched "según la ley de Ohm" and "qué dice la ley de la termodinámica"
         )
         return any(kw in msg_lower for kw in legal_context_keywords)
 

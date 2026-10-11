@@ -84,6 +84,8 @@ class LegalQueryClassifier:
         "ley", "decreto", "código", "codigo", "estatuto", "resolución",
         "resolucion", "acuerdo", "reglamento", "norma", "artículo",
         "articulo", "parágrafo", "disposición", "disposicion", "numeral",
+        # B6: Constitución como referencia normativa
+        "constitución", "constitucion", "constitución política",
     )
     JURISPRUDENCIAL_KW = (
         "jurisprudencia", "sentencia", "casación", "casacion", "precedente",
@@ -156,6 +158,14 @@ class LegalQueryClassifier:
             result.detected_article = art_match.group(0)
             # Check if norm is also specified (either numbered or named)
             norm_match = self.NORM_PATTERN_NUMBERED.search(query) or self.NORM_PATTERN_NAMED.search(query)
+            # B6: keyword-only fallback for norms at end of string (e.g. "Constitución?")
+            if not norm_match:
+                keyword_only = re.search(
+                    r"\b(c[oó]digo|constituci[oó]n|estatuto)\b",
+                    query, re.IGNORECASE,
+                )
+                if keyword_only:
+                    norm_match = keyword_only
             if norm_match:
                 result.detected_norm = norm_match.group(0)
             else:
@@ -172,6 +182,15 @@ class LegalQueryClassifier:
 
         # BLOQUE 1: detectar norma independientemente de si hay artículo
         norm_match_standalone = self.NORM_PATTERN_NUMBERED.search(query) or self.NORM_PATTERN_NAMED.search(query)
+        # B6: si no matchea el pattern completo, intentar keyword-only
+        # (ej: "Constitución?" al final sin palabra siguiente)
+        if not norm_match_standalone:
+            keyword_only = re.search(
+                r"\b(c[oó]digo|constituci[oó]n|estatuto)\b",
+                query, re.IGNORECASE,
+            )
+            if keyword_only:
+                norm_match_standalone = keyword_only
         if norm_match_standalone and not result.detected_norm:
             result.detected_norm = norm_match_standalone.group(0)
 

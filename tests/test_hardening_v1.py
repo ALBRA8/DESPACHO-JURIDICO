@@ -169,17 +169,19 @@ class TestEffectControlledVocabulary:
             if valid_effect == "desconocido":
                 continue
             j = Jurisprudence(id="j", court="CC", effect=valid_effect)
-            assert j.effect == valid_effect, f"Failed for: {valid_effect}"
+            # B1: effect migrates to reach/force in __post_init__
+            assert j.reach == valid_effect or j.force == valid_effect, \
+                f"Failed for: {valid_effect} (reach={j.reach}, force={j.force})"
 
     def test_effect_invalid_becomes_desconocido(self):
         from albra.knowledge.schemas import Jurisprudence
         j = Jurisprudence(id="j", court="CC", effect="banana")
-        assert j.effect == "desconocido", "Invalid effect should become 'desconocido'"
+        assert j.force == "desconocido", "Invalid effect should become force='desconocido'"
 
     def test_effect_empty_becomes_desconocido(self):
         from albra.knowledge.schemas import Jurisprudence
         j = Jurisprudence(id="j", court="CC", effect="")
-        assert j.effect == "desconocido"
+        assert j.force == "desconocido"
 
     def test_effect_none_becomes_desconocido(self):
         from albra.knowledge.schemas import validate_effect
@@ -202,15 +204,15 @@ class TestEffectControlledVocabulary:
 
     def test_effect_distinguishes_erga_omnes_from_inter_partes(self):
         """BLOQUE 3: el sistema distingue tipos de efecto."""
-        from albra.knowledge.schemas import Jurisprudence, is_binding_effect
+        from albra.knowledge.schemas import Jurisprudence
         j_erga = Jurisprudence(id="j1", court="Corte Constitucional",
                                effect="erga_omnes")
         j_inter = Jurisprudence(id="j2", court="Juzgado Civil",
                                 effect="inter_partes")
-        assert is_binding_effect(j_erga.effect) is True
-        assert is_binding_effect(j_inter.effect) is False
+        assert j_erga.binding is True
+        assert j_inter.binding is False
         # NO son equivalentes
-        assert j_erga.effect != j_inter.effect
+        assert j_erga.reach != j_inter.reach
 
     def test_verification_uses_effect_not_binding(self):
         """BLOQUE 3: verification distingue effect types en conflict detection."""
@@ -222,14 +224,14 @@ class TestEffectControlledVocabulary:
             source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
             authority="Corte Constitucional", document_type="sentencia",
             snippet="t", is_current=True, score=0.8,
-            provenance={"effect": "erga_omnes"},
+            provenance={"force": "vinculante", "reach": "erga_omnes"},
         )
         c2 = EvidenceCandidate(
             source_id="c2", document_id="d2",
             source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
             authority="Corte Suprema", document_type="sentencia",
             snippet="t", is_current=True, score=0.7,
-            provenance={"effect": "vinculante"},
+            provenance={"force": "vinculante"},
         )
         v = LegalVerifier().verify(RetrievalResult(candidates=[c1, c2]))
         # Multiple binding → high severity conflict
@@ -237,14 +239,13 @@ class TestEffectControlledVocabulary:
         assert len(high_conflicts) >= 1, "Should detect jurisprudence contradiction"
         # Conflict description mentions effects (check ALL conflicts, not just first)
         all_descs = " ".join(c.description for c in v.conflicts)
-        assert "erga_omnes" in all_descs or "vinculante" in all_descs, \
+        assert "vinculante" in all_descs or "precedente" in all_descs, \
             f"Effect types should appear in conflict descriptions: {all_descs}"
 
     def test_effect_desconocido_not_binding(self):
         from albra.knowledge.schemas import Jurisprudence
         j = Jurisprudence(id="j", court="CC", effect="desconocido")
         assert j.binding is False
-        assert j.effect == "desconocido"
 
 
 # ============================================================

@@ -259,49 +259,81 @@ class Article:
 
 
 # ============================================================
-# VOCABULARIO CONTROLADO DE EFECTOS JURISPRUDENCIALES — BLOQUE 3
+# VOCABULARIO CONTROLADO DE EFECTOS JURISPRUDENCIALES — B1 HARDENING
 # ============================================================
 
-# Valores válidos para Jurisprudence.effect
-# NO son mutuamente excluyentes — una sentencia puede tener múltiples dimensiones.
-# Pero el campo `effect` captura el EFECTO PRINCIPAL de la decisión.
-EFFECT_VALUES: frozenset[str] = frozenset({
-    "inter_partes",              # efecto solo entre las partes (sentencias comunes)
-    "erga_omnes",                # efecto general (constitucionalidad, unificación)
-    "precedente",                # regla establecida como precedente vinculante
-    "criterio_interpretativo",   # guía interpretativa no vinculante
-    "vinculante",                # precedente vinculante (Corte Constitucional AT/IN/EX)
-    "orientador",               # criterio orientador (no vinculante)
-    "hito_jurisprudencial",      # hito de impacto doctrinal
-    "desconocido",               # efecto no determinable (no inferir)
+# B1: Separar REACH (alcance) de FORCE (fuerza precedencial)
+# Estas son dimensiones jurídicas distintas:
+# - REACH: a quién afecta la decisión (erga_omnes vs inter_partes)
+# - FORCE: cómo se trata como precedente (vinculante vs orientador)
+
+# --- REACH / ALCANCE ---
+REACH_VALUES: frozenset[str] = frozenset({
+    "inter_partes",     # afecta solo a las partes del proceso
+    "erga_omnes",      # afecta a todos (constitucionalidad, unificación)
+    "unknown",         # no se puede determinar
 })
 
-# Efectos que implican vinculancia (binding=True)
+def validate_reach(reach: str | None) -> str:
+    """Valida y normaliza reach. Si inválido → 'unknown' (no asumir inter_partes)."""
+    if not reach:
+        return "unknown"
+    r = reach.lower().strip()
+    return r if r in REACH_VALUES else "unknown"
+
+# --- FORCE / FUERZA PRECEDENCIAL ---
+FORCE_VALUES: frozenset[str] = frozenset({
+    "vinculante",              # precedente vinculante (Corte Constitucional AT/IN/EX)
+    "precedente",              # regla establecida como precedente
+    "criterio_interpretativo", # guía interpretativa no vinculante
+    "orientador",             # criterio orientador (no vinculante)
+    "hito_jurisprudencial",   # hito de impacto doctrinal
+    "desconocido",            # fuerza no determinable
+})
+
+def validate_force(force: str | None) -> str:
+    """Valida y normaliza force. Si inválido → 'desconocido'."""
+    if not force:
+        return "desconocido"
+    f = force.lower().strip()
+    return f if f in FORCE_VALUES else "desconocido"
+
+# Fuerzas que implican vinculancia
+BINDING_FORCES: frozenset[str] = frozenset({
+    "vinculante", "precedente",
+})
+
+def is_binding_force(force: str | None) -> bool:
+    """Determina si una fuerza implica vinculancia."""
+    return validate_force(force) in BINDING_FORCES
+
+# --- DEPRECATED: effect vocabulario (compat hacia atrás) ---
+EFFECT_VALUES: frozenset[str] = frozenset({
+    "inter_partes", "erga_omnes", "precedente", "criterio_interpretativo",
+    "vinculante", "orientador", "hito_jurisprudencial", "desconocido",
+})
+
 BINDING_EFFECTS: frozenset[str] = frozenset({
     "erga_omnes", "precedente", "vinculante",
 })
 
-# Efectos que NO son vinculantes
 NON_BINDING_EFFECTS: frozenset[str] = frozenset({
     "inter_partes", "criterio_interpretativo", "orientador", "hito_jurisprudencial",
     "desconocido",
 })
 
-
 def validate_effect(effect: str | None) -> str:
-    """Valida y normaliza un valor de effect.
-
-    Si el valor no está en EFFECT_VALUES → retorna "desconocido"
-    (NO inferir efecto jurídico sin datos suficientes).
+    """DEPRECATED: usar validate_reach + validate_force.
+    Compat: si effect contiene un valor de reach, lo deja en reach.
+    Si contiene un valor de force, lo deja en force.
     """
     if not effect:
         return "desconocido"
     e = effect.lower().strip()
     return e if e in EFFECT_VALUES else "desconocido"
 
-
 def is_binding_effect(effect: str | None) -> bool:
-    """Determina si un efecto implica vinculancia."""
+    """DEPRECATED: usar is_binding_force."""
     return validate_effect(effect) in BINDING_EFFECTS
 
 
@@ -321,28 +353,66 @@ class Jurisprudence:
     file_number: str = ""          # expediente "T-123/2023"
     decision_date: date | None = None
 
-    # P1-1 FIX: effect reemplaza binding:bool
-    # Vocabulario controlado de efectos jurídicos:
-    # - erga_omnes: efecto general (sentencias de constitucionalidad, unificación)
-    # - inter_partes: efecto solo entre las partes (sentencias comunes)
-    # - intra_partes: efecto limitado al proceso (autos interlocutorios)
-    # - precedente: regla vinculante establecida como precedente
-    # - criterio_interpretativo: guía interpretativa no vinculante
-    # - vinculante: precedente vinculante (Corte Constitucional AT/IN/EX)
-    # - orientador: criterio orientador (no vinculante)
-    # - hito_jurisprudencial: hito jurisprudencial (impacto doctrinal)
-    effect: str = "inter_partes"  # BLOQUE 3: default conservador
+    # B1 HARDENING: reach y force separados
+    # REACH: a quién afecta la decisión
+    reach: str = "unknown"  # B1: default 'unknown' (NO asumir inter_partes)
+    # FORCE: cómo se trata como precedente
+    force: str = "desconocido"  # B1: default 'desconocido'
 
-    # BLOQUE 3: validar effect en __post_init__
+    # DEPRECATED: effect — compat hacia atrás.
+    # Si se pasa effect= al constructor, se deriva reach+force de él.
+    # Si no se pasa, reach='unknown' y force='desconocido'.
+    effect: str = ""  # B1: vacío por defecto, se procesa en __post_init__
+
+    # B1: validar reach, force, y derivar effect en __post_init__
     def __post_init__(self) -> None:
-        self.effect = validate_effect(self.effect)
+        # Validar reach y force con vocabulario controlado
+        self.reach = validate_reach(self.reach)
+        self.force = validate_force(self.force)
+        # Compat: si effect fue pasado, migrar a reach/force
+        if self.effect:
+            eff = self.effect.lower().strip()
+            # Si effect es un valor de reach, usarlo como reach
+            if eff in REACH_VALUES:
+                if self.reach == "unknown":
+                    self.reach = eff
+            # Si effect es un valor de force, usarlo como force
+            if eff in FORCE_VALUES:
+                if self.force == "desconocido":
+                    self.force = eff
+            # Si effect es un valor del vocabulario antiguo que mezcla ambos:
+            if eff == "erga_omnes":
+                self.reach = "erga_omnes"
+                self.force = "vinculante" if self.force == "desconocido" else self.force
+            elif eff == "inter_partes":
+                self.reach = "inter_partes"
+            elif eff == "vinculante":
+                self.force = "vinculante"
+            elif eff == "precedente":
+                self.force = "precedente"
+            elif eff == "orientador":
+                self.force = "orientador"
+            elif eff == "criterio_interpretativo":
+                self.force = "criterio_interpretativo"
+            elif eff == "hito_jurisprudencial":
+                self.force = "hito_jurisprudencial"
+            elif eff == "desconocido":
+                pass  # keep defaults
+            self.effect = ""  # limpiar para evitar uso futuro
 
-    # Compat hacia atrás: binding se mantiene como derived property
-    # BLOQUE 3: usa is_binding_effect() que valida vocabulario controlado
+    # Compat: binding deriva de force (no de reach)
     @property
     def binding(self) -> bool:
-        """Derived: True si effect implica vinculancia (via vocabulario controlado)."""
-        return is_binding_effect(self.effect)
+        """B1: binding deriva de FORCE, no de reach."""
+        return is_binding_force(self.force)
+
+    # Compat: effect_property deriva reach+force
+    @property
+    def effect_resolved(self) -> str:
+        """B1: devuelve effect combinado para compat."""
+        if self.reach != "unknown" and self.force != "desconocido":
+            return f"{self.reach}+{self.force}"
+        return self.force if self.force != "desconocido" else self.reach
 
     # Jurisdicción (P1-3 FIX: necesario para filtrar sentencias de otros países)
     jurisdiction: str = "CO"

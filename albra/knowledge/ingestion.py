@@ -72,11 +72,11 @@ class LegalIngestionPipeline:
 
     @staticmethod
     def _validate_url(url: str) -> bool:
-        """BLOQUE 4: valida que una URL tenga formato correcto.
+        """B3 HARDENING: valida formato de URL.
 
-        NO verifica accesibilidad. Solo formato.
-        Acepta: http(s)://dominio/path
-        Rechaza: strings sin esquema, espacios, caracteres inválidos.
+        Solo valida formato HTTP(S). NO verifica accesibilidad ni autenticidad.
+        format_valid != authenticated
+        format_valid != accessible
         """
         if not url or not isinstance(url, str):
             return False
@@ -87,7 +87,6 @@ class LegalIngestionPipeline:
             return False
         if not (url.startswith("http://") or url.startswith("https://")):
             return False
-        # Mínimo: scheme://x
         parts = url.split("://", 1)
         if len(parts) != 2:
             return False
@@ -203,16 +202,23 @@ class LegalIngestionPipeline:
                 detail=f"status={normalized_status}, effective_from={effective_from}",
             ))
 
-            # 9. PROVENANCE
+            # 9. PROVENANCE — B3+B4 HARDENING
+            # B3: separar format_valid de authenticated
+            # B4: campos calculados por el sistema NO pueden ser sobrescritos por caller
+            # Construir provenance: primero caller metadata, DESPUÉS sobrescribir
+            # con valores calculados por el sistema (system wins).
             provenance_data = {
+                **(provenance or {}),  # caller metadata first
+                # B3+B4: system-computed fields OVERRIDE caller (security)
                 "source_url": source_url,
-                "source_url_verified": url_validated,  # BLOQUE 4
+                "source_url_format_valid": url_validated,  # B3: solo formato
+                "source_url_accessible": False,  # B3: no scraping en esta fase
+                "source_url_authenticated": False,  # B3: no verificar autenticidad
                 "source_tier": source_tier.name,
                 "authority": authority,
                 "retrieval_timestamp": time.time(),
                 "content_hash": content_hash,
                 "transformation": "raw→parsed→indexed",
-                **(provenance or {}),
             }
             result.steps.append(IngestionStep(
                 name="provenance", ok=True,

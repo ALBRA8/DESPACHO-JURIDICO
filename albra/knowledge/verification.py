@@ -107,21 +107,21 @@ class LegalVerifier:
             ))
 
         # Conflict 3: jurisprudence contradiction
-        # BLOQUE 3: usar effect (vocabulario controlado) en vez de binding:bool
-        # Distingue erga_omnes de precedente de vinculante
-        from albra.knowledge.schemas import BINDING_EFFECTS, validate_effect
+        # B1 HARDENING: usar force (fuerza precedencial) en vez de effect
+        # Distingue vinculante de precedente de orientador
+        from albra.knowledge.schemas import BINDING_FORCES, validate_force
         binding_candidates = []
         for c in candidates:
-            effect = c.provenance.get("effect", "desconocido")
-            validated = validate_effect(effect)
-            if validated in BINDING_EFFECTS:
+            force = c.provenance.get("force", "desconocido")
+            validated = validate_force(force)
+            if validated in BINDING_FORCES:
                 binding_candidates.append((c, validated))
 
         if len(binding_candidates) > 1:
-            effects_found = {e for _, e in binding_candidates}
+            forces_found = {f for _, f in binding_candidates}
             conflict_desc = (
                 f"Found {len(binding_candidates)} binding decisions "
-                f"(effects: {effects_found}). Check for conflicting precedents."
+                f"(forces: {forces_found}). Check for conflicting precedents."
             )
             conflicts.append(Conflict(
                 kind="jurisprudence_contradiction",

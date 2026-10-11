@@ -130,9 +130,14 @@ class TemporalQuery:
 
 @dataclass
 class VersionHistory:
-    """Historia de versiones de una norma."""
+    """Historia de versiones de una norma.
+
+    B5 HARDENING: registra diagnostics para fechas inválidas.
+    No lanza excepción. No afirma vigencia. Pero NO oculta el problema.
+    """
     norm_id: str
     versions: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
     def add_version(
         self,
@@ -143,10 +148,13 @@ class VersionHistory:
         status: str,
         supersedes_id: str | None = None,
     ) -> None:
+        # B5: validar fechas al agregar
+        from_str = str(effective_from) if effective_from else None
+        until_str = str(effective_until) if effective_until else None
         self.versions.append({
             "version": version,
-            "effective_from": str(effective_from) if effective_from else None,
-            "effective_until": str(effective_until) if effective_until else None,
+            "effective_from": from_str,
+            "effective_until": until_str,
             "status": status,
             "supersedes_id": supersedes_id,
         })
@@ -155,19 +163,31 @@ class VersionHistory:
     def get_version_at(self, when: date) -> dict[str, Any] | None:
         """Devuelve la versión vigente en la fecha dada.
 
-        BLOQUE 2: maneja fechas malformadas de forma segura.
-        Si una fecha no se puede parsear → la versión NO se considera vigente
-        (fail-safe: no afirmar vigencia sin datos verificables).
+        B5: registra diagnostics para fechas inválidas sin crashar.
         """
-        for v in reversed(self.versions):  # iterate from most recent
+        self.diagnostics.clear()  # reset diagnostics per query
+        for v in reversed(self.versions):
             eff_from = self._safe_parse_date(v.get("effective_from"))
             eff_until = self._safe_parse_date(v.get("effective_until"))
-            # Si las fechas son inválidas y necesarias → skip esta versión
-            # (no podemos determinar su validez temporal)
+            # B5: si la fecha es inválida, registrar diagnostic
             if v.get("effective_from") and eff_from is None:
-                continue  # fecha inválida → no se puede verificar
+                self.diagnostics.append({
+                    "version": v.get("version"),
+                    "field": "effective_from",
+                    "value": v.get("effective_from"),
+                    "issue": "invalid_date_format",
+                    "message": f"Cannot parse effective_from='{v.get('effective_from')}' as ISO date",
+                })
+                continue
             if v.get("effective_until") and eff_until is None:
-                continue  # fecha inválida → no se puede verificar
+                self.diagnostics.append({
+                    "version": v.get("version"),
+                    "field": "effective_until",
+                    "value": v.get("effective_until"),
+                    "issue": "invalid_date_format",
+                    "message": f"Cannot parse effective_until='{v.get('effective_until')}' as ISO date",
+                })
+                continue
             if is_vigente(status=v["status"], effective_from=eff_from, effective_until=eff_until, when=when):
                 return v
         return None
