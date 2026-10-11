@@ -31,12 +31,27 @@ def test_agent_processes_greeting():
 
 
 def test_agent_legal_question_no_invention():
-    """Criterio: NO inventa conocimiento jurídico."""
+    """V1.6 P0-1: consulta jurídica ruteada a LegalKnowledgeEngine.
+    Sin corpus cargado → abstención (NO inventa conocimiento).
+    """
     agent = get_agent()
     asyncio.run(agent.boot())
-    result = asyncio.run(agent.process("¿qué dice el código civil sobre contratos?"))
-    # Debe decir que el conocimiento no está cargado
-    assert "cargado" in result["reply"].lower() or "no inventa" in result["reply"].lower()
+    # admin role tiene research.run - puede acceder al legal_engine
+    result = asyncio.run(agent.process(
+        "¿qué dice el código civil sobre contratos?",
+        user="test", user_role="admin",
+    ))
+    # P0-1: se rutó a legal_engine (no a reasoning fallback)
+    assert result.get("routed_to") == "legal_engine" or result.get("abstention") is True
+    # NO inventa: abstiene o pide aclaración
+    reply_lower = result["reply"].lower()
+    assert (
+        "evidencia" in reply_lower
+        or "no se encontró" in reply_lower
+        or "no inventa" in reply_lower
+        or "abstención" in reply_lower
+        or "aclaración" in reply_lower
+    ), f"Expected abstention/clarification, got: {reply_lower[:100]}"
     asyncio.run(agent.shutdown())
 
 

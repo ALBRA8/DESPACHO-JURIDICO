@@ -143,12 +143,38 @@ class LegalVerifier:
         )
 
     def _select_primary(self, candidates: list[EvidenceCandidate]) -> EvidenceCandidate | None:
-        """Selecciona la evidencia primaria."""
+        """Selecciona la evidencia primaria.
+
+        P0-2 FIX (CIERRE): Jerarquía de fuentes.
+
+        Orden de prioridad:
+        1. source_tier ASCENDENTE (S0=0 > S1=1 > S2=2 > S3=3 > S4=4)  ← CAMBIO: ya no negativo
+        2. vigencia temporal (current > historical)
+        3. score de relevancia
+        4. documento normativo/jurisprudencial > doctrina
+
+        Una fuente S4 NO puede superar a S0 únicamente por score semántico.
+        Solo puede superar S0 si:
+        - S0 no está en la lista (no se encuentra primaria), o
+        - S0 está `is_current=False` y S4 está `is_current=True`.
+        """
         if not candidates:
             return None
-        # Sort by tier (lower = better), then by score, then by current
+        # Sort por (tier ASC, is_current DESC, score DESC, document_type priority DESC)
+        # Nota: c.source_tier es SourceTier (IntEnum), S0=0, S4=4. Sort ascendente.
+        def doc_type_priority(doc_type: str) -> int:
+            # texto_normativo > jurisprudencia > doctrina
+            if doc_type in ("ley", "decreto", "codigo", "estatuto", "constitucion"):
+                return 3
+            if doc_type in ("sentencia", "auto"):
+                return 2
+            if doc_type in ("articulo_academico", "libro_doctrina", "tratado"):
+                return 1
+            return 0
+
         return sorted(candidates, key=lambda c: (
-            -c.source_tier,  # S0=0 < S1=1, so S0 sorts first (more authoritative)
-            -c.score,
-            -int(c.is_current),
+            c.source_tier,                # P0-2 FIX: ASCENDENTE - S0 primero
+            -int(c.is_current),           # current primero
+            -c.score,                     # score más alto primero
+            -doc_type_priority(c.document_type),
         ))[0]

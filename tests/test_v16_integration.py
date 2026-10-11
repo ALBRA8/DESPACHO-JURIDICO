@@ -58,12 +58,29 @@ def test_reasoning_provider_call_traced():
 
 
 def test_reasoning_legal_question_uses_local_fallback():
-    """Para legal_question NO usar LLM (no inventar)."""
+    """V1.6 P0-1: consulta jurídica ruteada a legal_engine (NO a LLM).
+
+    El sistema NO inventa doctrina - se abstiene si no hay corpus.
+    """
     async def _run():
         agent = get_agent()
         await agent.boot()
-        r = await agent.process("¿qué dice el artículo 25 del código civil?")
-        assert r["provider_used"] == "rules_fallback_legal"
+        # admin role para acceso a legal_engine
+        r = await agent.process(
+            "¿qué dice el artículo 25 del código civil?",
+            user="test", user_role="admin",
+        )
+        # P0-1: ruteado a legal_engine, no a LLM
+        assert r.get("routed_to") == "legal_engine" or r.get("abstention") is True
+        # NO inventa
+        reply_lower = r["reply"].lower()
+        assert (
+            "evidencia" in reply_lower
+            or "no se encontró" in reply_lower
+            or "no inventa" in reply_lower
+            or "abstención" in reply_lower
+            or "aclaración" in reply_lower
+        ), f"Expected abstention/clarification, got: {reply_lower[:100]}"
         await agent.shutdown()
     asyncio.run(_run())
 

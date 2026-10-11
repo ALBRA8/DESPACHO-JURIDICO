@@ -125,8 +125,12 @@ class LegalIngestionPipeline:
                 result.warnings.append(
                     f"document_type '{document_type}' not in standard catalog"
                 )
-            if authority and not authority.strip():
-                raise ValueError("authority required")
+            # P1-4 FIX: validar authority - reject None, "", whitespace-only
+            if not authority or not authority.strip():
+                raise ValueError(
+                    f"authority required (got: {authority!r}). "
+                    "Document cannot be ingested without a valid authority."
+                )
             result.steps.append(IngestionStep(
                 name="normalize", ok=True,
                 detail=f"type={document_type}, authority={authority}",

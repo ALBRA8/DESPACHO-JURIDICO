@@ -124,6 +124,19 @@ class Agent:
         self._organs["has_permission"] = has_permission
         self._organs["specialists"] = list_specialists()
 
+        # P0-1 FIX: Wire LegalKnowledgeEngine al organismo
+        # (órgano del Runtime - NO es autoridad paralela)
+        from albra.knowledge.legal_engine import LegalKnowledgeEngine
+        from albra.knowledge.retrieval import HybridRetriever
+        from albra.knowledge.retrieval_providers import InMemoryRetrievalProvider
+        legal_retriever = HybridRetriever(provider=InMemoryRetrievalProvider())
+        legal_engine = LegalKnowledgeEngine(
+            retriever=legal_retriever,
+            evidence_chain=self._organs["evidence"],
+        )
+        self._organs["legal_engine"] = legal_engine
+        self._organs["legal_retriever"] = legal_retriever
+
         # Wire Runtime con TODOS los órganos (single source of truth)
         runtime.wire(self._organs)
 

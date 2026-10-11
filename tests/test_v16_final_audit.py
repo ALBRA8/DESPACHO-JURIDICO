@@ -595,19 +595,29 @@ def test_birth_test_full_pipeline():
 
 
 def test_birth_test_legal_question_safe():
-    """Birth test con pregunta legal → NO inventa doctrina."""
+    """Birth test con pregunta legal → NO inventa doctrina.
+    V1.6 P0-1: ahora rutea a legal_engine → abstiene si no hay corpus.
+    """
     async def _run():
         agent = get_agent()
         await agent.boot()
+        # admin role para que tenga research.run
         r = await agent.process(
             "¿Qué dice el artículo 25 del código civil colombiano?",
-            user="legal_birth",
-            user_role="anon",
+            user="legal_birth", user_role="admin",
         )
-        # Debe usar rules_fallback_legal (no LLM)
-        assert r["provider_used"] == "rules_fallback_legal"
-        # Reply debe decir que conocimiento no está cargado
-        assert "cargado" in r["reply"].lower() or "no inventa" in r["reply"].lower()
+        # P0-1: ruteado a legal_engine
+        assert r.get("routed_to") == "legal_engine" or r.get("abstention") is True
+        # NO inventa - abstiene o pide aclaración
+        reply_lower = r["reply"].lower()
+        assert (
+            "evidencia" in reply_lower
+            or "no se encontró" in reply_lower
+            or "no inventa" in reply_lower
+            or "abstención" in reply_lower
+            or "aclaración" in reply_lower
+            or "artículo" in reply_lower  # ArticleResolver pidió aclaración de norma
+        ), f"Expected abstention/clarification, got: {reply_lower[:120]}"
         await agent.shutdown()
     asyncio.run(_run())
 

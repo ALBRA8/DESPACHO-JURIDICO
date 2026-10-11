@@ -55,12 +55,22 @@ def is_vigente(
     effective_until: date | None,
     when: date | None = None,
 ) -> bool:
-    """¿La norma estaba vigente en `when`? Si when=None, ¿hoy?"""
+    """¿La norma estaba vigente en `when`? Si when=None, ¿hoy?
+
+    P0-3 (CIERRE): 'historica' debe ser NO vigente.
+    """
     when = when or date.today()
-    if status in ("derogada", "sustituida", "inexequible", "nula", "perdida_vigencia"):
-        # Si tiene effective_until, mirar si when <= effective_until
+    # P0-3 FIX: incluir 'historica' en statuses no-vigentes.
+    # Si la norma se marca como histórica, NO puede aparecer como vigente.
+    if status in ("derogada", "sustituida", "inexequible", "nula", "perdida_vigencia", "historica"):
+        # Verificar si when cae dentro del rango [effective_from, effective_until]
+        # aunque el status actual sea no-vigente (pudo haber estado vigente antes)
         if effective_until and when <= effective_until:
-            return True  # estaba vigente antes de la derogación
+            # Solo es vigente-en-fecha si además when >= effective_from
+            if effective_from and when >= effective_from:
+                return True  # estaba vigente antes de la pérdida de vigencia
+            if not effective_from:
+                return True  # sin effective_from pero cuando <= effective_until
         return False
     if status == "suspendida":
         return False  # temporalmente suspendida

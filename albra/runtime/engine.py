@@ -126,8 +126,87 @@ class Runtime:
         classification = classify_fn(message)
         await audit.record("data.classification", classification.as_dict())
 
-        # 3. POLICY + kill switch
+        # 2.5 POLICY + kill switch (necesario antes de rutear a legal_engine)
         policy_state = policy.get_state()
+
+        # P0-1 FIX: si la consulta es jurídica, rutear a LegalKnowledgeEngine
+        # (órgano del Runtime - NO es autoridad paralela)
+        legal_engine = self.organs.get("legal_engine")
+        if legal_engine and self._is_legal_query(message, classification):
+            # Pasar por ExecutionGuard antes de invocar legal_engine
+            guard = execution_guard.check(
+                action="internal_research",
+                user_role=user_role,
+                policy_state=policy_state,
+                autonomy_controller=autonomy,
+                rbac_check_fn=has_perm,
+                legal_gate_verdict=legal_gate.evaluate(
+                    "internal_research", text=message, actor_role=user_role,
+                ),
+                data_classification=classification,
+                circuit_breaker=circuit_breaker,
+                provider_name=self.settings.default_provider,
+            )
+            if not guard.allowed:
+                await audit.record("legal_engine.guard.deny", guard.as_dict())
+                execution_trace.finish(
+                    exec_id, status="aborted",
+                    errors=[f"guard: {guard.reason}"],
+                )
+                return {
+                    "reply": f"Acceso denegado al motor jurídico: {guard.reason}",
+                    "authorized": False, "execution_id": exec_id,
+                    "classification": classification.classification.name,
+                }
+            # Invocar LegalKnowledgeEngine - ÓRGANO DEL RUNTIME
+            await audit.record("legal_engine.invoked", {"query": message[:100]})
+            legal_response = await legal_engine.query(message, user_role=user_role)
+            execution_trace.append_tool_call(
+                exec_id, name="legal_engine.query", args={"message": message},
+                ok=True, result=legal_response.format_text()[:200],
+            )
+            # Record evidence chain if primary evidence found
+            if legal_response.blocks and self.organs.get("evidence"):
+                for block in legal_response.blocks:
+                    for citation in block.citations:
+                        await self.organs["evidence"].add(
+                            kind="legal_response_citation",
+                            content=block.text[:200],
+                            source=citation.source_url or citation.authority,
+                            metadata={
+                                "execution_id": exec_id,
+                                "citation_text": citation.citation_text,
+                                "source_tier": citation.source_tier,
+                                "is_current": citation.is_current,
+                                "document_id": citation.document_id,
+                            },
+                        )
+            execution_trace.finish(
+                exec_id, status="completed",
+                outputs={"reply": legal_response.format_text()},
+                decisions=[{
+                    "routed_to": "legal_engine",
+                    "abstention": legal_response.abstention,
+                    "needs_clarification": legal_response.needs_clarification,
+                }],
+            )
+            await audit.record("outtake", {
+                "response": legal_response.format_text()[:200],
+                "user": user, "channel": channel,
+                "execution_id": exec_id, "routed_to": "legal_engine",
+            })
+            return {
+                "reply": legal_response.format_text(),
+                "authorized": True,
+                "execution_id": exec_id,
+                "classification": classification.classification.name,
+                "legal_verdict": "APPROVED",
+                "routed_to": "legal_engine",
+                "abstention": legal_response.abstention,
+                "needs_clarification": legal_response.needs_clarification,
+            }
+
+        # 3. POLICY + kill switch (ya calculado arriba, solo checkear)
         if policy_state.kill_switch:
             execution_trace.finish(
                 exec_id, status="aborted",
@@ -347,6 +426,35 @@ class Runtime:
             "provider_used": response.get("provider"),
             "promoted_lessons_used": len(plan.get("promoted_lessons", [])),
         }
+
+    def _is_legal_query(self, message: str, classification: Any) -> bool:
+        """P0-1: Detecta si la consulta debe rutearse al LegalKnowledgeEngine.
+
+        Una consulta es jurídica si:
+        - menciona términos legales colombianos (ley, decreto, código, jurisprudencia, etc.)
+        - menciona un artículo específico
+        - menciona una autoridad (corte, congreso, etc.)
+        - NO es un saludo o consulta trivial
+        """
+        msg_lower = message.lower()
+        # Saludo → no es legal
+        greetings = ("hola", "buenas", "hello", "hi", "saludos", "qué más", "que mas", "epa")
+        if any(g == msg_lower.strip() or msg_lower.strip().startswith(g) and len(msg_lower) < 20
+               for g in greetings):
+            return False
+        # Status check → no es legal
+        if any(kw in msg_lower for kw in ("estado del agente", "doctor", "salud del", "diagnóstico")):
+            return False
+        # Términos jurídicos → es legal
+        legal_keywords = (
+            "ley", "decreto", "código", "codigo", "estatuto", "constitución",
+            "constitucion", "norma", "artículo", "articulo", "jurisprudencia",
+            "sentencia", "precedente", "corte constitucional", "corte suprema",
+            "consejo de estado", "vigente", "derogad", "magistrado", "ponente",
+            "expediente", "radicado", "parágrafo", "disposición", "reglamento",
+            "resolución", "acuerdo",
+        )
+        return any(kw in msg_lower for kw in legal_keywords)
 
     async def run(
         self,

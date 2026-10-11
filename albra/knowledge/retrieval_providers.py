@@ -99,12 +99,17 @@ class InMemoryRetrievalProvider(RetrievalProvider):
         if query.query_type in ("semantic", "hybrid") and query.query_text:
             candidates.extend(self._semantic_search(query))
 
-        # Deduplicate by source_id
+        # P1-2 FIX: deduplicación por (source_id, article_id) - NO pierde artículos
+        # de la misma norma. Dos artículos distintos = keys distintas.
         seen = set()
         unique: list[EvidenceCandidate] = []
         for c in candidates:
-            if c.source_id not in seen:
-                seen.add(c.source_id)
+            # Identity: (source, document, article/file_number, snippet_hash)
+            art_id = c.provenance.get("article_id", "")
+            file_num = c.provenance.get("file_number", "")
+            identity_key = (c.source_id, art_id, file_num)
+            if identity_key not in seen:
+                seen.add(identity_key)
                 unique.append(c)
 
         result = RetrievalResult(
@@ -126,12 +131,19 @@ class InMemoryRetrievalProvider(RetrievalProvider):
         return result
 
     def _exact_search(self, query: RetrievalQuery) -> list[EvidenceCandidate]:
-        """Búsqueda exacta por número de norma, artículo, expediente."""
+        """Búsqueda exacta por número de norma, artículo, expediente.
+
+        P1-8 FIX: respeta jurisdiction, authority, source_tier, temporal.
+        NO evada las restricciones que aplica el retrieval híbrido.
+        """
         candidates: list[EvidenceCandidate] = []
         # Match by norm number
         if query.norm_number:
             for norm in self._norms.values():
                 if norm.number and query.norm_number.lower() in norm.number.lower():
+                    # P1-8 FIX: aplicar todos los filtros jurídicos
+                    if not self._matches_filters(norm, query, doc_type="norm"):
+                        continue
                     # Found norm - return its articles (or the specific article if requested)
                     for art_id in norm.article_ids:
                         art = self._articles.get(art_id)
@@ -145,9 +157,51 @@ class InMemoryRetrievalProvider(RetrievalProvider):
         if query.file_number:
             for j in self._jurisprudence.values():
                 if j.file_number and query.file_number.lower() in j.file_number.lower():
+                    # P1-8 FIX: aplicar filtros
+                    if not self._matches_jurisprudence_filters(j, query):
+                        continue
                     candidates.append(self._jurisprudence_to_candidate(j, score=1.0))
 
         return candidates
+
+    def _matches_filters(self, norm: Norm, query: RetrievalQuery, *, doc_type: str = "norm") -> bool:
+        """Aplica todos los filtros jurídicos a una norma (usado por exact y semantic)."""
+        # Jurisdiction
+        if query.jurisdiction and norm.jurisdiction != query.jurisdiction:
+            return False
+        # Authority
+        if query.authority and query.authority.lower() not in norm.authority.lower():
+            return False
+        # Source tier
+        if query.source_tier and norm.source_tier != query.source_tier:
+            return False
+        # Temporal
+        if query.temporal and query.temporal.query_type != "any":
+            from albra.knowledge.temporal import TemporalState
+            ts = TemporalState(
+                status=norm.status,
+                effective_from=norm.effective_from,
+                effective_until=norm.effective_until,
+            )
+            if not query.temporal.matches(ts):
+                return False
+        return True
+
+    def _matches_jurisprudence_filters(self, j: Jurisprudence, query: RetrievalQuery) -> bool:
+        """P1-3 FIX: filtra jurisprudencia por jurisdicción.
+
+        Sin este filtro, una sentencia argentina aparecería en queries CO.
+        """
+        # P1-3 FIX: ahora Jurisprudence tiene campo jurisdiction
+        if query.jurisdiction and j.jurisdiction != query.jurisdiction:
+            return False
+        # Authority (court)
+        if query.authority and query.authority.lower() not in (j.court or "").lower():
+            return False
+        # Source tier
+        if query.source_tier and j.source_tier != query.source_tier:
+            return False
+        return True
 
     def _semantic_search(self, query: RetrievalQuery) -> list[EvidenceCandidate]:
         """Búsqueda semántica vía cosine similarity."""
@@ -159,34 +213,18 @@ class InMemoryRetrievalProvider(RetrievalProvider):
             norm = self._norms.get(art.norm_id)
             if not norm:
                 continue
-            # Filter by jurisdiction
-            if query.jurisdiction and norm.jurisdiction != query.jurisdiction:
+            # Aplicar filtros jurídicos (P1-8 unificado)
+            if not self._matches_filters(norm, query, doc_type="norm"):
                 continue
-            # Filter by authority
-            if query.authority and query.authority.lower() not in norm.authority.lower():
-                continue
-            # Filter by source_tier
-            if query.source_tier and norm.source_tier != query.source_tier:
-                continue
-            # Temporal filter
-            if query.temporal and query.temporal.query_type != "any":
-                from albra.knowledge.temporal import TemporalState
-                ts = TemporalState(
-                    status=norm.status,
-                    effective_from=norm.effective_from,
-                    effective_until=norm.effective_until,
-                )
-                if not query.temporal.matches(ts):
-                    continue
 
             score = _cosine(q_emb, art.embedding)
             if score < query.min_score:
                 continue
             candidates.append(self._article_to_candidate(art, norm, score=score))
 
-        # Search jurisprudence
+        # Search jurisprudence (P1-3 FIX: con filtro jurisdicción)
         for j in self._jurisprudence.values():
-            if query.jurisdiction and j.authority and query.jurisdiction != "CO":
+            if not self._matches_jurisprudence_filters(j, query):
                 continue
             score = _cosine(q_emb, j.embedding)
             if score < query.min_score:
@@ -210,7 +248,8 @@ class InMemoryRetrievalProvider(RetrievalProvider):
             effective_until=norm.effective_until,
         )
         return EvidenceCandidate(
-            source_id=norm.source_id if hasattr(norm, "source_id") else norm.id,
+            # P1-6 FIX: Norm no tiene source_id - usar norm.id directamente
+            source_id=norm.id,
             document_id=norm.id,
             source_tier=norm.source_tier,
             authority=norm.authority,
@@ -249,7 +288,9 @@ class InMemoryRetrievalProvider(RetrievalProvider):
                 "file_number": j.file_number,
                 "decision_date": str(j.decision_date) if j.decision_date else None,
                 "ponente": j.ponente,
-                "binding": j.binding,
+                "effect": j.effect,  # P1-1: effect en vez de binding:bool
+                "binding": j.binding,  # derived para compat
+                "jurisdiction": j.jurisdiction,  # P1-3
             },
         )
 

@@ -177,7 +177,10 @@ class LegalKnowledgeEngine:
         """Construye la query de retrieval según el tipo de consulta."""
         # Default: hybrid
         query_type = "hybrid"
-        if classification.query_type == "consulta_articulo_especifico":
+        # Si hay artículo + norma identificados → exact match (score=1.0)
+        if classification.detected_article and classification.detected_norm:
+            query_type = "exact"
+        elif classification.query_type == "consulta_articulo_especifico":
             query_type = "exact"
         elif classification.query_type == "consulta_jurisprudencial":
             query_type = "semantic"

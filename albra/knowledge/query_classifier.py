@@ -71,7 +71,14 @@ class QueryClassification:
 
 
 class LegalQueryClassifier:
-    """Clasificador de consultas jurídicas colombianas."""
+    """Clasificador de consultas jurídicas colombianas.
+
+    P1-5: integra ArticleResolver para detectar ambigüedad de artículos.
+    """
+
+    def __init__(self) -> None:
+        # P1-5: integrar ArticleResolver
+        self.article_resolver = ArticleResolver()
 
     NORMATIVE_KW = (
         "ley", "decreto", "código", "codigo", "estatuto", "resolución",
@@ -147,12 +154,14 @@ class LegalQueryClassifier:
             if norm_match:
                 result.detected_norm = norm_match.group(0)
             else:
-                # Article mentioned without norm → need clarification
+                # P1-5: usar ArticleResolver integrado para aclaración
+                resolution = self.article_resolver.resolve(query)
                 result.query_type = QUERY_ARTICULO_ESPECIFICO
                 result.needs_clarification = True
-                result.clarification_question = (
+                result.clarification_question = resolution.get(
+                    "clarification_question",
                     "Has mencionado un artículo pero no la norma a la que pertenece. "
-                    "¿Podrías especificar a qué código, ley, decreto o estatuto pertenece el artículo?"
+                    "¿Podrías especificar a qué código, ley, decreto o estatuto pertenece el artículo?",
                 )
                 return result
 
@@ -225,6 +234,9 @@ class LegalQueryClassifier:
 class ArticleResolver:
     """Resuelve referencias a artículos pidiendo aclaración cuando hace falta la norma.
 
+    P1-5 FIX: ahora INTEGRADO en el flujo jurídico. Es invocado por
+    LegalQueryClassifier.classify() para detectar ambigüedad.
+
     Ejemplo:
     "Artículo 200" → "¿De qué código, ley o estatuto?"
     "Artículo 200 del Código Civil colombiano" → activa recuperación específica.
@@ -237,15 +249,14 @@ class ArticleResolver:
 
     NORM_KEYWORDS = (
         "código", "codigo", "ley", "decreto", "estatuto", "resolución", "resolucion",
-        "acuerdo", "reglamento",
+        "acuerdo", "reglamento", "constitución", "constitucion",
     )
 
     def is_ambiguous(self, query: str) -> bool:
         """¿El query menciona artículo pero no la norma a la que pertenece?"""
-        if not any(p.search(query) for p in self.AMBIGUOUS_PATTERNS):
-            # Check if article mentioned without norm
-            if not re.search(r"art[ií]culo\s+\d+", query, re.IGNORECASE):
-                return False
+        # Check if article mentioned at all
+        if not re.search(r"art[ií]culo\s+\d+", query, re.IGNORECASE):
+            return False
         # Article present - check if norm is too
         if any(kw in query.lower() for kw in self.NORM_KEYWORDS):
             return False
@@ -258,3 +269,20 @@ class ArticleResolver:
             "(código, ley, decreto o estatuto) a la que pertenece. "
             "¿Podrías especificar la norma? Ejemplo: 'Artículo 200 del Código Civil colombiano'."
         )
+
+    def resolve(self, query: str) -> dict[str, Any]:
+        """Resuelve una referencia a artículo. Devuelve dict con status y info.
+
+        P1-5: integración real en el flujo jurídico.
+        """
+        if not self.is_ambiguous(query):
+            # Artículo identificado + norma identificada → OK
+            return {
+                "status": "resolved",
+                "needs_clarification": False,
+            }
+        return {
+            "status": "ambiguous",
+            "needs_clarification": True,
+            "clarification_question": self.ask_for_clarification(query),
+        }

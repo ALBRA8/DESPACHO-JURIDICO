@@ -75,7 +75,22 @@ class AbstentionPolicy:
         verification: VerificationResult,
         query_classification: Any = None,
     ) -> AbstentionDecision:
-        # 1. No evidence at all → abstain
+        """P1-7 FIX: orden optimizado - ambiguous_query al INICIO.
+
+        Sin debilitar fail-safe. La verificación de ambigüedad es gratuita
+        y debe preceder a cualquier búsqueda de evidencia para evitar
+        recuperación irrelevante.
+        """
+        # P1-7 FIX: 1. Ambiguous query FIRST (fail-safe, no retrieval needed)
+        if query_classification and query_classification.needs_clarification:
+            return AbstentionDecision(
+                abstain=True,
+                reason_code="ambiguous_query",
+                reason_text=query_classification.clarification_question or ABSTENTION_MESSAGES["ambiguous_query"],
+                fallback_action="ask_user",
+            )
+
+        # 2. No evidence at all → abstain
         if result.abstention or not result.candidates:
             return AbstentionDecision(
                 abstain=True,
@@ -84,7 +99,7 @@ class AbstentionPolicy:
                 fallback_action="try_research",
             )
 
-        # 2. No primary source
+        # 3. No primary source
         from albra.knowledge.schemas import SourceTier
         has_primary = any(
             c.source_tier in (SourceTier.S0_PRIMARY_SUPERIOR, SourceTier.S1_OFFICIAL)
@@ -98,7 +113,7 @@ class AbstentionPolicy:
                 fallback_action="hitl",
             )
 
-        # 3. Conflicting sources → HITL
+        # 4. Conflicting sources → HITL
         if any(c.severity == "high" for c in verification.conflicts):
             return AbstentionDecision(
                 abstain=True,
@@ -107,16 +122,16 @@ class AbstentionPolicy:
                 fallback_action="hitl",
             )
 
-        # 4. Ambiguous query (article without norm)
-        if query_classification and query_classification.needs_clarification:
+        # 5. Expired norm (all candidates are historical)
+        if not any(c.is_current for c in verification.candidates):
             return AbstentionDecision(
                 abstain=True,
-                reason_code="ambiguous_query",
-                reason_text=query_classification.clarification_question or ABSTENTION_MESSAGES["ambiguous_query"],
+                reason_code="expired_norm",
+                reason_text=ABSTENTION_MESSAGES["expired_norm"],
                 fallback_action="ask_user",
             )
 
-        # 5. Low confidence
+        # 6. Low confidence
         avg_score = sum(c.score for c in result.candidates) / max(1, len(result.candidates))
         if avg_score < self.CONFIDENCE_THRESHOLD:
             return AbstentionDecision(
@@ -124,15 +139,6 @@ class AbstentionPolicy:
                 reason_code="low_confidence",
                 reason_text=ABSTENTION_MESSAGES["low_confidence"],
                 fallback_action="try_research",
-            )
-
-        # 6. Expired norm (all candidates are historical)
-        if not any(c.is_current for c in verification.candidates):
-            return AbstentionDecision(
-                abstain=True,
-                reason_code="expired_norm",
-                reason_text=ABSTENTION_MESSAGES["expired_norm"],
-                fallback_action="ask_user",
             )
 
         # OK to respond

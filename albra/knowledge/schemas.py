@@ -264,12 +264,37 @@ class Article:
 
 @dataclass
 class Jurisprudence:
-    """Sentencia o providencia judicial."""
+    """Sentencia o providencia judicial.
+
+    P1-1 (CIERRE): NO usar binding:bool binario. Diferenciar efectos jurídicos.
+    """
     id: str
     court: str                     # "Corte Constitucional", "Corte Suprema", "Consejo de Estado"
     process_type: str = ""         # "Sentencia C", "Sentencia STC", etc.
     file_number: str = ""          # expediente "T-123/2023"
     decision_date: date | None = None
+
+    # P1-1 FIX: effect reemplaza binding:bool
+    # Vocabulario controlado de efectos jurídicos:
+    # - erga_omnes: efecto general (sentencias de constitucionalidad, unificación)
+    # - inter_partes: efecto solo entre las partes (sentencias comunes)
+    # - intra_partes: efecto limitado al proceso (autos interlocutorios)
+    # - precedente: regla vinculante establecida como precedente
+    # - criterio_interpretativo: guía interpretativa no vinculante
+    # - vinculante: precedente vinculante (Corte Constitucional AT/IN/EX)
+    # - orientador: criterio orientador (no vinculante)
+    # - hito_jurisprudencial: hito jurisprudencial (impacto doctrinal)
+    effect: str = "inter_partes"  # P1-1: default inter_partes (más conservador)
+
+    # Compat hacia atrás: binding se mantiene como derived property
+    # para no romper código existente que use j.binding
+    @property
+    def binding(self) -> bool:
+        """Derived: True si effect es vinculante."""
+        return self.effect in ("erga_omnes", "precedente", "vinculante")
+
+    # Jurisdicción (P1-3 FIX: necesario para filtrar sentencias de otros países)
+    jurisdiction: str = "CO"
 
     # Contenido jurídico
     ponente: str = ""              # magistrado ponente
@@ -289,7 +314,6 @@ class Jurisprudence:
 
     # Vigencia del precedente
     precedent_status: str = "vigente"   # vigente, superado, derogado
-    binding: bool = False                # si es precedente vinculante (erga omnes)
 
     # Metadata
     source_url: str = ""

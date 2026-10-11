@@ -143,7 +143,7 @@ def engine_with_jurisprudence():
         decision="Declarar exequible",
         ratio_decidendi="El artículo X es constitucional porque respeta la dignidad humana.",
         precedent_status="vigente",
-        binding=True,
+        effect="vinculante",  # P1-1: effect en vez de binding:bool
         source_url="https://www.corteconstitucional.gov.co",
         source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
         authority="Corte Constitucional",
