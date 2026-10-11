@@ -17,25 +17,21 @@ Documentos ingeridos:
 from __future__ import annotations
 
 import asyncio
-import sys
 from datetime import date
-from pathlib import Path
 
 # Add corpus pilot to path
-CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "corpus_pilot"
-sys.path.insert(0, str(CORPUS_DIR / "constitution"))
-sys.path.insert(0, str(CORPUS_DIR / "legislation"))
-sys.path.insert(0, str(CORPUS_DIR / "jurisprudence"))
-
-from constitucion_1991 import CONSTITUCION_1991
-from jurisprudencia_real import (
+from albra.knowledge.colombia.corpus_pilot.constitution.constitucion_1991 import CONSTITUCION_1991
+from albra.knowledge.colombia.corpus_pilot.jurisprudence.jurisprudencia_real import (
     DOCTRINA_1,
     SENTENCIA_AR,
     SENTENCIA_C_251_2002,
     SENTENCIA_T_760_2008,
 )
-from leyes_reales import LEY_80_1993, LEY_100_1993, LEY_1480_2011
-
+from albra.knowledge.colombia.corpus_pilot.legislation.leyes_reales import (
+    LEY_80_1993,
+    LEY_100_1993,
+    LEY_1480_2011,
+)
 from albra.knowledge.ingestion import LegalIngestionPipeline
 from albra.knowledge.retrieval import HybridRetriever
 from albra.knowledge.retrieval_providers import InMemoryRetrievalProvider
