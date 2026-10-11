@@ -428,33 +428,72 @@ class Runtime:
         }
 
     def _is_legal_query(self, message: str, classification: Any) -> bool:
-        """P0-1: Detecta si la consulta debe rutearse al LegalKnowledgeEngine.
+        """BLOQUE 5: Detecta si la consulta debe rutearse al LegalKnowledgeEngine.
+
+        Estrategia mejorada: usar el LegalQueryClassifier en vez de
+        keyword matching crudo. Esto evita falsos positivos como
+        "ley de Ohm" (física) que matchea "ley" sin contexto jurídico.
 
         Una consulta es jurídica si:
-        - menciona términos legales colombianos (ley, decreto, código, jurisprudencia, etc.)
-        - menciona un artículo específico
-        - menciona una autoridad (corte, congreso, etc.)
-        - NO es un saludo o consulta trivial
+        - el classifier la clasifica como tipo jurídico (no UNKNOWN), o
+        - contiene patrones normativos específicos (Ley N, artículo X del Código Y)
         """
-        msg_lower = message.lower()
-        # Saludo → no es legal
+        msg_lower = message.lower().strip()
+
+        # 1. Excluir saludos
         greetings = ("hola", "buenas", "hello", "hi", "saludos", "qué más", "que mas", "epa")
-        if any(g == msg_lower.strip() or msg_lower.strip().startswith(g) and len(msg_lower) < 20
+        if any(g == msg_lower or (msg_lower.startswith(g) and len(msg_lower) < 20)
                for g in greetings):
             return False
-        # Status check → no es legal
+
+        # 2. Excluir status checks
         if any(kw in msg_lower for kw in ("estado del agente", "doctor", "salud del", "diagnóstico")):
             return False
-        # Términos jurídicos → es legal
-        legal_keywords = (
-            "ley", "decreto", "código", "codigo", "estatuto", "constitución",
-            "constitucion", "norma", "artículo", "articulo", "jurisprudencia",
-            "sentencia", "precedente", "corte constitucional", "corte suprema",
-            "consejo de estado", "vigente", "derogad", "magistrado", "ponente",
-            "expediente", "radicado", "parágrafo", "disposición", "reglamento",
-            "resolución", "acuerdo",
+
+        # 3. BLOQUE 5: usar LegalQueryClassifier para clasificar
+        #    En vez de keyword matching crudo, el classifier usa patrones
+        #    más precisos (NORM_PATTERN, ARTICLE_PATTERN, etc.)
+        try:
+            from albra.knowledge.query_classifier import (
+                QUERY_NORMATIVE,
+                LegalQueryClassifier,
+            )
+            classifier = LegalQueryClassifier()
+            result = classifier.classify(message)
+            # Si detectó un artículo → es legal (incluso si necesita aclaración)
+            if result.detected_article:
+                return True
+            # Si detectó una norma → es legal
+            if result.detected_norm:
+                return True
+            # Si el tipo es jurídico PERO no es solo QUERY_NORMATIVE con baja confianza
+            # (QUERY_NORMATIVE con score=1 puede ser "ley de ohm" — physics)
+            non_normative_legal = (
+                "consulta_jurisprudencial", "consulta_doctrinal",
+                "consulta_historica", "consulta_vigencia",
+                "consulta_comparativa", "consulta_procesal",
+                "consulta_interpretativa", "consulta_caso",
+            )
+            if result.query_type in non_normative_legal:
+                return True
+            # QUERY_NORMATIVE con alta confianza (>2 keywords) → legal
+            if result.query_type == QUERY_NORMATIVE and result.confidence >= 0.8:
+                return True
+        except Exception:  # noqa: BLE001
+            pass  # fallback a keyword matching si classifier falla
+
+        # 4. Fallback: keywords con contexto (no standalone "ley")
+        # BLOQUE 5: "ley" solo no es suficiente — requiere contexto jurídico
+        legal_context_keywords = (
+            "decreto", "código", "codigo", "estatuto", "constitución",
+            "constitucion", "jurisprudencia", "sentencia", "precedente",
+            "corte constitucional", "corte suprema", "consejo de estado",
+            "vigente", "derogad", "magistrado", "ponente",
+            "expediente", "radicado", "parágrafo", "disposición",
+            "reglamento", "ley número", "de la ley número", "según la ley",
+            "qué dice la ley", "que dice la ley",
         )
-        return any(kw in msg_lower for kw in legal_keywords)
+        return any(kw in msg_lower for kw in legal_context_keywords)
 
     async def run(
         self,

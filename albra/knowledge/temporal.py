@@ -153,13 +153,34 @@ class VersionHistory:
         self.versions.sort(key=lambda v: v["version"])
 
     def get_version_at(self, when: date) -> dict[str, Any] | None:
-        """Devuelve la versión vigente en la fecha dada."""
+        """Devuelve la versión vigente en la fecha dada.
+
+        BLOQUE 2: maneja fechas malformadas de forma segura.
+        Si una fecha no se puede parsear → la versión NO se considera vigente
+        (fail-safe: no afirmar vigencia sin datos verificables).
+        """
         for v in reversed(self.versions):  # iterate from most recent
-            eff_from = date.fromisoformat(v["effective_from"]) if v["effective_from"] else None
-            eff_until = date.fromisoformat(v["effective_until"]) if v["effective_until"] else None
+            eff_from = self._safe_parse_date(v.get("effective_from"))
+            eff_until = self._safe_parse_date(v.get("effective_until"))
+            # Si las fechas son inválidas y necesarias → skip esta versión
+            # (no podemos determinar su validez temporal)
+            if v.get("effective_from") and eff_from is None:
+                continue  # fecha inválida → no se puede verificar
+            if v.get("effective_until") and eff_until is None:
+                continue  # fecha inválida → no se puede verificar
             if is_vigente(status=v["status"], effective_from=eff_from, effective_until=eff_until, when=when):
                 return v
         return None
+
+    @staticmethod
+    def _safe_parse_date(s: str | None) -> date | None:
+        """Parsea una fecha ISO de forma segura. None si inválida."""
+        if not s:
+            return None
+        try:
+            return date.fromisoformat(s)
+        except (ValueError, TypeError):
+            return None
 
     def current_version(self) -> dict[str, Any] | None:
         return self.get_version_at(date.today())

@@ -131,9 +131,14 @@ class LegalQueryClassifier:
         r"(ley|decreto|c[oó]digo|estatuto|resoluci[oó]n|acuerdo|reglamento)\s+\d+\s+de\s+\d{4}",
         re.IGNORECASE,
     )
-    # Norm by name (e.g. "Código Civil", "Código Penal", "Constitución Política")
+    # Norm by name — BLOQUE 1: captura denominaciones compuestas completas
+    # Usa non-greedy + lookahead para no truncar "Código Sustantivo del Trabajo"
+    # ni capturar palabras irrelevantes de la pregunta.
     NORM_PATTERN_NAMED = re.compile(
-        r"(c[oó]digo\s+\w+|constituci[oó]n\s+\w*|estatuto\s+\w+|ley\s+\d+)",
+        r"\b(c[oó]digo|constituci[oó]n|estatuto)\b\s+"
+        r"((?:[\wáéíóúÁÉÍÓÚñÑ]+\s*)+?)"
+        r"(?=\s*(?:art[ií]culo|sobre|qu[eé]\s|est[aá]\s|vigente|derogad|"
+        r"modificad|¿|\?|\.|,|;|:|$))",
         re.IGNORECASE,
     )
     FILE_PATTERN = re.compile(
@@ -164,6 +169,11 @@ class LegalQueryClassifier:
                     "¿Podrías especificar a qué código, ley, decreto o estatuto pertenece el artículo?",
                 )
                 return result
+
+        # BLOQUE 1: detectar norma independientemente de si hay artículo
+        norm_match_standalone = self.NORM_PATTERN_NUMBERED.search(query) or self.NORM_PATTERN_NAMED.search(query)
+        if norm_match_standalone and not result.detected_norm:
+            result.detected_norm = norm_match_standalone.group(0)
 
         # Detect file/radicado (jurisprudence)
         file_match = self.FILE_PATTERN.search(query)

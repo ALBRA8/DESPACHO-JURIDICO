@@ -303,9 +303,9 @@ class TestSafety:
             source_tier=SourceTier.S0_PRIMARY_SUPERIOR,
             authority="Corte Suprema", document_type="sentencia",
             snippet="text 2", is_current=True, score=0.7,
-            provenance={"binding": True},
+            provenance={"effect": "erga_omnes"},
         )
-        c1.provenance = {"binding": True}
+        c1.provenance = {"effect": "vinculante"}
         verifier = LegalVerifier()
         result = RetrievalResult(candidates=[c1, c2])
         v = verifier.verify(result)

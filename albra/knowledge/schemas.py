@@ -259,6 +259,53 @@ class Article:
 
 
 # ============================================================
+# VOCABULARIO CONTROLADO DE EFECTOS JURISPRUDENCIALES — BLOQUE 3
+# ============================================================
+
+# Valores válidos para Jurisprudence.effect
+# NO son mutuamente excluyentes — una sentencia puede tener múltiples dimensiones.
+# Pero el campo `effect` captura el EFECTO PRINCIPAL de la decisión.
+EFFECT_VALUES: frozenset[str] = frozenset({
+    "inter_partes",              # efecto solo entre las partes (sentencias comunes)
+    "erga_omnes",                # efecto general (constitucionalidad, unificación)
+    "precedente",                # regla establecida como precedente vinculante
+    "criterio_interpretativo",   # guía interpretativa no vinculante
+    "vinculante",                # precedente vinculante (Corte Constitucional AT/IN/EX)
+    "orientador",               # criterio orientador (no vinculante)
+    "hito_jurisprudencial",      # hito de impacto doctrinal
+    "desconocido",               # efecto no determinable (no inferir)
+})
+
+# Efectos que implican vinculancia (binding=True)
+BINDING_EFFECTS: frozenset[str] = frozenset({
+    "erga_omnes", "precedente", "vinculante",
+})
+
+# Efectos que NO son vinculantes
+NON_BINDING_EFFECTS: frozenset[str] = frozenset({
+    "inter_partes", "criterio_interpretativo", "orientador", "hito_jurisprudencial",
+    "desconocido",
+})
+
+
+def validate_effect(effect: str | None) -> str:
+    """Valida y normaliza un valor de effect.
+
+    Si el valor no está en EFFECT_VALUES → retorna "desconocido"
+    (NO inferir efecto jurídico sin datos suficientes).
+    """
+    if not effect:
+        return "desconocido"
+    e = effect.lower().strip()
+    return e if e in EFFECT_VALUES else "desconocido"
+
+
+def is_binding_effect(effect: str | None) -> bool:
+    """Determina si un efecto implica vinculancia."""
+    return validate_effect(effect) in BINDING_EFFECTS
+
+
+# ============================================================
 # SCHEMA: JURISPRUDENCE (sentencia)
 # ============================================================
 
@@ -284,14 +331,18 @@ class Jurisprudence:
     # - vinculante: precedente vinculante (Corte Constitucional AT/IN/EX)
     # - orientador: criterio orientador (no vinculante)
     # - hito_jurisprudencial: hito jurisprudencial (impacto doctrinal)
-    effect: str = "inter_partes"  # P1-1: default inter_partes (más conservador)
+    effect: str = "inter_partes"  # BLOQUE 3: default conservador
+
+    # BLOQUE 3: validar effect en __post_init__
+    def __post_init__(self) -> None:
+        self.effect = validate_effect(self.effect)
 
     # Compat hacia atrás: binding se mantiene como derived property
-    # para no romper código existente que use j.binding
+    # BLOQUE 3: usa is_binding_effect() que valida vocabulario controlado
     @property
     def binding(self) -> bool:
-        """Derived: True si effect es vinculante."""
-        return self.effect in ("erga_omnes", "precedente", "vinculante")
+        """Derived: True si effect implica vinculancia (via vocabulario controlado)."""
+        return is_binding_effect(self.effect)
 
     # Jurisdicción (P1-3 FIX: necesario para filtrar sentencias de otros países)
     jurisdiction: str = "CO"

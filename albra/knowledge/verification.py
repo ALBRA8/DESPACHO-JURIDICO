@@ -106,16 +106,27 @@ class LegalVerifier:
                 recommended_action="Filter to highest-tier source",
             ))
 
-        # Conflict 3: jurisprudence contradiction (multiple binding decisions)
-        binding = [c for c in candidates if c.provenance.get("binding")]
-        if len(binding) > 1:
+        # Conflict 3: jurisprudence contradiction
+        # BLOQUE 3: usar effect (vocabulario controlado) en vez de binding:bool
+        # Distingue erga_omnes de precedente de vinculante
+        from albra.knowledge.schemas import BINDING_EFFECTS, validate_effect
+        binding_candidates = []
+        for c in candidates:
+            effect = c.provenance.get("effect", "desconocido")
+            validated = validate_effect(effect)
+            if validated in BINDING_EFFECTS:
+                binding_candidates.append((c, validated))
+
+        if len(binding_candidates) > 1:
+            effects_found = {e for _, e in binding_candidates}
+            conflict_desc = (
+                f"Found {len(binding_candidates)} binding decisions "
+                f"(effects: {effects_found}). Check for conflicting precedents."
+            )
             conflicts.append(Conflict(
                 kind="jurisprudence_contradiction",
-                description=(
-                    f"Found {len(binding)} binding decisions. "
-                    "Check for conflicting precedents."
-                ),
-                candidate_ids=[c.source_id for c in binding],
+                description=conflict_desc,
+                candidate_ids=[c.source_id for c, _ in binding_candidates],
                 severity="high",
                 recommended_action="HITL review required - legal decision may need interpretation",
             ))
@@ -145,18 +156,24 @@ class LegalVerifier:
     def _select_primary(self, candidates: list[EvidenceCandidate]) -> EvidenceCandidate | None:
         """Selecciona la evidencia primaria.
 
-        P0-2 FIX (CIERRE): Jerarquía de fuentes.
+        BLOQUE 6: Documentación precisa del comportamiento real.
 
-        Orden de prioridad:
-        1. source_tier ASCENDENTE (S0=0 > S1=1 > S2=2 > S3=3 > S4=4)  ← CAMBIO: ya no negativo
-        2. vigencia temporal (current > historical)
-        3. score de relevancia
-        4. documento normativo/jurisprudencial > doctrina
+        Orden de prioridad (sort ascendente por tupla):
+        1. source_tier ASCENDENTE: S0=0 < S1=1 < S2=2 < S3=3 < S4=4
+           → S0 SIEMPRE sortea antes que S4, sin importar score.
+           Una fuente S4 NO puede superar a S0 por mayor similitud semántica.
+        2. is_current DESC: preferir vigente sobre histórica (dentro del mismo tier)
+        3. score DESC: mayor relevancia semántica primero (dentro del mismo tier + vigencia)
+        4. doc_type_priority DESC: texto normativo > jurisprudencia > doctrina (desempate)
 
-        Una fuente S4 NO puede superar a S0 únicamente por score semántico.
-        Solo puede superar S0 si:
-        - S0 no está en la lista (no se encuentra primaria), o
-        - S0 está `is_current=False` y S4 está `is_current=True`.
+        Esta jerarquía garantiza que:
+        - Una fuente primaria superior (S0) con score 0.3 supera a
+          una fuente secundaria (S4) con score 0.95.
+        - Dentro del mismo tier, se prefiere vigente sobre histórica.
+        - Dentro del mismo tier + vigencia, mayor score gana.
+        - En empate total, se prefiere texto normativo sobre doctrina.
+
+        NO hay excepción donde S4 supere S0 por score.
         """
         if not candidates:
             return None

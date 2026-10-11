@@ -70,6 +70,31 @@ class LegalIngestionPipeline:
         self.evidence_chain = evidence_chain
         self._stats: dict[str, int] = {"ingested": 0, "failed": 0, "warnings": 0}
 
+    @staticmethod
+    def _validate_url(url: str) -> bool:
+        """BLOQUE 4: valida que una URL tenga formato correcto.
+
+        NO verifica accesibilidad. Solo formato.
+        Acepta: http(s)://dominio/path
+        Rechaza: strings sin esquema, espacios, caracteres inválidos.
+        """
+        if not url or not isinstance(url, str):
+            return False
+        url = url.strip()
+        if not url:
+            return False
+        if " " in url or "\n" in url or "\t" in url:
+            return False
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return False
+        # Mínimo: scheme://x
+        parts = url.split("://", 1)
+        if len(parts) != 2:
+            return False
+        if not parts[1] or "." not in parts[1]:
+            return False
+        return True
+
     async def ingest(
         self,
         *,
@@ -131,9 +156,22 @@ class LegalIngestionPipeline:
                     f"authority required (got: {authority!r}). "
                     "Document cannot be ingested without a valid authority."
                 )
+            # BLOQUE 4: validar source_url
+            url_validated = False
+            if source_url:
+                url_validated = self._validate_url(source_url)
+                if not url_validated:
+                    result.warnings.append(
+                        f"source_url '{source_url[:50]}' is malformed — "
+                        "provenance will mark source_url_verified=False"
+                    )
+            else:
+                result.warnings.append(
+                    "source_url is empty — provenance will mark source_url_verified=False"
+                )
             result.steps.append(IngestionStep(
                 name="normalize", ok=True,
-                detail=f"type={document_type}, authority={authority}",
+                detail=f"type={document_type}, authority={authority}, url_verified={url_validated}",
             ))
 
             # 5. PARSE
@@ -168,6 +206,7 @@ class LegalIngestionPipeline:
             # 9. PROVENANCE
             provenance_data = {
                 "source_url": source_url,
+                "source_url_verified": url_validated,  # BLOQUE 4
                 "source_tier": source_tier.name,
                 "authority": authority,
                 "retrieval_timestamp": time.time(),
