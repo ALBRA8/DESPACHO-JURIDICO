@@ -79,8 +79,10 @@ def test_no_user_password_bearer_format():
 
 
 def test_jwt_token_issue_and_verify():
-    """JWT HMAC token funciona - sin deps externas."""
-    os.environ["ALBRA_JWT_SECRET"] = "test_secret_for_ci"
+    """HMAC signed bearer token funciona - sin deps externas."""
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "test_secret_for_ci_32_chars_min"
+    reset_settings()
     try:
         token = issue_token(subject="user1", role="admin", expires_in_seconds=3600)
         payload = verify_token(token)
@@ -89,53 +91,68 @@ def test_jwt_token_issue_and_verify():
         assert payload["role"] == "admin"
         assert "exp" in payload
     finally:
+        reset_settings()
         os.environ.pop("ALBRA_JWT_SECRET", None)
 
 
 def test_jwt_token_invalid_denied():
     """Token inválido → DENY."""
-    os.environ["ALBRA_JWT_SECRET"] = "test_secret"
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "test_secret_32_chars_min"
+    reset_settings()
     try:
         assert verify_token("invalid.token.here") is None
         assert verify_token("") is None
         assert verify_token("no-dot") is None
     finally:
+        reset_settings()
         os.environ.pop("ALBRA_JWT_SECRET", None)
 
 
 def test_jwt_token_expired_denied():
     """Token expirado → DENY."""
-    os.environ["ALBRA_JWT_SECRET"] = "test_secret"
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "test_secret_32_chars_min"
+    reset_settings()
     try:
         token = issue_token(subject="user", role="admin", expires_in_seconds=-1)
         # Already expired
         payload = verify_token(token)
         assert payload is None
     finally:
+        reset_settings()
         os.environ.pop("ALBRA_JWT_SECRET", None)
 
 
 def test_jwt_token_tampered_denied():
-    """Token con payload manipulado → firma no calza → DENY."""
-    os.environ["ALBRA_JWT_SECRET"] = "secret1"
+    """Token emitido con secret A no verifica con secret B → firma no calza → DENY."""
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "secret_a_32_chars_min_for_test"
+    reset_settings()
     try:
         token = issue_token(subject="user", role="anon", expires_in_seconds=3600)
         # Cambiar el secret para que la firma no calce
-        os.environ["ALBRA_JWT_SECRET"] = "secret2"
+        os.environ["ALBRA_JWT_SECRET"] = "secret_b_32_chars_min_for_test"
+        reset_settings()
         payload = verify_token(token)
         assert payload is None  # Firma no calza
     finally:
+        reset_settings()
         os.environ.pop("ALBRA_JWT_SECRET", None)
 
 
 def test_jwt_token_wrong_secret_denied():
     """Token emitido con secret A no verifica con secret B."""
-    os.environ["ALBRA_JWT_SECRET"] = "secret_a"
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "secret_a_32_chars_min_for_test"
+    reset_settings()
     token = issue_token(subject="user", role="admin")
-    os.environ["ALBRA_JWT_SECRET"] = "secret_b"
+    os.environ["ALBRA_JWT_SECRET"] = "secret_b_32_chars_min_for_test"
+    reset_settings()
     payload = verify_token(token)
     assert payload is None
     os.environ.pop("ALBRA_JWT_SECRET", None)
+    reset_settings()
 
 
 # --- FRONT 3: Runtime sovereignty ---
@@ -445,13 +462,16 @@ def test_attack_jwt_no_token():
 
 
 def test_attack_jwt_invalid_token():
-    """Ataque: JWT inválido → DENY."""
-    os.environ["ALBRA_JWT_SECRET"] = "test"
+    """Ataque: bearer token inválido → DENY."""
+    from albra.config.settings import reset_settings
+    os.environ["ALBRA_JWT_SECRET"] = "strong_test_secret_32_chars_min"
+    reset_settings()
     try:
         assert verify_token("invalid") is None
         assert verify_token("a.b") is None
         assert verify_token("a.b.c") is None
     finally:
+        reset_settings()
         os.environ.pop("ALBRA_JWT_SECRET", None)
 
 

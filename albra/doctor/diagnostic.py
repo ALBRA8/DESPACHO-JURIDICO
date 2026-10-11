@@ -144,19 +144,38 @@ class Doctor:
         )
 
     def _check_config(self) -> CheckResult:
+        """V1.6 P0.1: Verifica que secretos sean obligatorios + fuertes."""
+        from albra.config.settings import (
+            InsecureConfigurationError,
+        )
         env = self.settings.environment
-        jwt_default = self.settings.jwt_secret == "change-me-in-production"
-        admin_default = self.settings.admin_password == "change-me"
-        if env == "production" and (jwt_default or admin_default):
+        # Verificar que jwt_secret es accesible (fail-closed si no)
+        try:
+            _ = self.settings.jwt_secret
+            jwt_ok = True
+            jwt_detail = "ALBRA_JWT_SECRET presente"
+        except InsecureConfigurationError as e:
+            jwt_ok = False
+            jwt_detail = f"ALBRA_JWT_SECRET inválido: {e}"
+        try:
+            _ = self.settings.admin_password
+            admin_ok = True
+            admin_detail = "ALBRA_ADMIN_PASSWORD presente"
+        except InsecureConfigurationError as e:
+            admin_ok = False
+            admin_detail = f"ALBRA_ADMIN_PASSWORD inválido: {e}"
+
+        if not jwt_ok or not admin_ok:
             return CheckResult(
                 organ="config",
                 ok=False,
                 severity="error",
-                detail="Producción con secretos por defecto",
-                recommendation="Configurar ALBRA_JWT_SECRET y ALBRA_ADMIN_PASSWORD en producción",
+                detail=f"{jwt_detail}; {admin_detail}",
+                recommendation="Set ALBRA_JWT_SECRET (32+ chars) y ALBRA_ADMIN_PASSWORD (8+ chars) en environment",
             )
         return CheckResult(
-            organ="config", ok=True, severity="ok", detail=f"Environment: {env}"
+            organ="config", ok=True, severity="ok",
+            detail=f"Environment: {env}, secrets strong and present",
         )
 
     def _check_tools(self) -> CheckResult:

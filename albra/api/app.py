@@ -1,11 +1,12 @@
-"""FastAPI app - V1.6 FINAL con JWT HMAC auth (sin hardcoded secrets).
+"""FastAPI app - V1.6 FINAL con HMAC signed bearer token (sin hardcoded secrets).
 
 Pipeline:
-HTTP → Authentication (JWT) → Identity → RBAC → Policy → ExecutionGuard → Agent
+HTTP → Authentication (HMAC bearer) → Identity → RBAC → Policy → ExecutionGuard → Agent
 
 NO hardcoded service tokens.
 NO user:password como bearer.
-Token JWT firmado con ALBRA_JWT_SECRET (configuración externa).
+HMAC bearer token firmado con ALBRA_JWT_SECRET (configuración externa).
+NO es JWT/JWS estándar - ver albra/security/tokens.py para detalles.
 """
 from __future__ import annotations
 
@@ -51,10 +52,10 @@ async def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict[str, Any]:
-    """Dependency FastAPI - autentica via JWT Bearer token.
+    """Dependency FastAPI - autentica via HMAC signed bearer token.
 
     SIN hardcoded service tokens. SIN user:password.
-    Solo JWT firmado con ALBRA_JWT_SECRET.
+    Solo HMAC bearer token firmado con ALBRA_JWT_SECRET.
 
     Returns:
         dict con user, role, authenticated
@@ -65,7 +66,7 @@ async def require_auth(
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Bearer JWT token required",
+            detail="Bearer HMAC token required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -82,7 +83,7 @@ async def require_auth(
         "user": payload["sub"],
         "role": payload["role"],
         "authenticated": True,
-        "session": f"jwt-{payload['iat']}",
+        "session": f"hmac-{payload['iat']}",
         "token_payload": payload,
     }
 
@@ -186,7 +187,7 @@ async def evidence_list(
 
 @app.post("/login")
 async def login(req: LoginRequest) -> dict[str, Any]:
-    """Endpoint público de login - devuelve JWT firmado tras auth real."""
+    """Endpoint público de login - devuelve HMAC signed bearer tras auth real."""
     _, gate, _ = await _get_agent()
     ctx = await gate.login(req.user, req.password)
     if not ctx.authenticated:
@@ -194,7 +195,7 @@ async def login(req: LoginRequest) -> dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
-    # Emite JWT firmado con ALBRA_JWT_SECRET
+    # Emite HMAC signed bearer token con ALBRA_JWT_SECRET
     token = issue_token(
         subject=ctx.user,
         role=ctx.role,

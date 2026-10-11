@@ -92,11 +92,13 @@ class SecurityGate:
         self.log = get_logger("albra.security")
         self.hitl = HITLGate(settings)
         self._sessions: dict[str, AuthContext] = {}
-        # Usuarios en memoria (producción: ir a DB/IDP)
+        # P0.1: admin_password es OBLIGATORIO (fail-closed en property)
+        # Si falta o es default conocido → InsecureConfigurationError aquí.
+        admin_password = settings.admin_password  # triggers fail-closed
         self._users: dict[str, dict[str, Any]] = {
             "admin": {
                 "role": "admin",
-                "password_hash": hash_password(self.settings.admin_password),
+                "password_hash": hash_password(admin_password),
             },
         }
 

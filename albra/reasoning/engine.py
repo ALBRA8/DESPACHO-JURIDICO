@@ -221,12 +221,32 @@ class ReasoningEngine:
         plan: dict[str, Any],
         tool_results: list[dict[str, Any]],
     ) -> str:
-        """Construye prompt para el LLM con contexto estructurado."""
+        """Construye prompt para el LLM con contexto estructurado.
+
+        P0.2: incorpora promoted_lessons al contexto enviado al provider.
+        Las lessons son observaciones operativas validadas por HITL -
+        NO son código, NO son policy, NO son permisos. Solo contexto.
+        """
         intent = plan.get("intent", {})
         tools_summary = "\n".join(
             f"- {r['tool']}: ok={r['result'].get('ok', False)}"
             for r in tool_results
         ) or "(ninguna)"
+
+        # P0.2: Incorporar promoted_lessons (de SelfImprove → Runtime → plan)
+        promoted_lessons = plan.get("promoted_lessons", [])
+        if promoted_lessons:
+            lessons_block = "\n".join(
+                f"- [pattern={lesson.get('pattern', '?')}] {lesson.get('text', '')}"
+                for lesson in promoted_lessons
+            )
+            lessons_section = (
+                f"\nLecciones operativas promovidas (contexto, NO código):\n"
+                f"{lessons_block}\n"
+            )
+        else:
+            lessons_section = ""
+
         return (
             f"Eres el Agente Base del Despacho Jurídico Digital ALBRA.\n"
             f"NO inventes conocimiento jurídico. Si se te pregunta por leyes, "
@@ -234,7 +254,8 @@ class ReasoningEngine:
             f"Mensaje del usuario: {message}\n"
             f"Intención detectada: {intent.get('name', 'unknown')} "
             f"(confianza {intent.get('confidence', 0)})\n"
-            f"Herramientas invocadas:\n{tools_summary}\n\n"
+            f"Herramientas invocadas:\n{tools_summary}\n"
+            f"{lessons_section}\n"
             f"Responde de forma concisa:"
         )
 

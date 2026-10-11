@@ -1,12 +1,25 @@
-"""JWT-style token con HMAC-SHA256 (sin deps externas - stdlib only).
+"""HMAC signed bearer token (NO es JWT/JWS estándar - ver nota).
+
+DECISIÓN P1: mantener formato HMAC propietario, NO llamarlo JWT.
 
 Tokens:
-- signed with ALBRA_JWT_SECRET (config via env, NUNCA hardcodeado)
+- signed with ALBRA_JWT_SECRET (config via Settings.jwt_secret, OBLIGATORIO)
 - payload: {sub, role, iat, exp}
 - exp configurable (default 24h)
 - verificar con hmac.compare_digest (constante-timing)
 
 Formato: base64url(payload).base64url(signature)
+
+NO es JWT/JWS estándar porque:
+- no usa header.algo.typ
+- no usa RS256/ES256, solo HMAC-SHA256
+- es un bearer token firmado simple y seguro
+
+La seguridad criptográfica se mantiene:
+- HMAC-SHA256
+- compare_digest (constante-timing)
+- expiración verificada
+- rechazo de tampering (firma no calza → DENY)
 """
 from __future__ import annotations
 
@@ -14,9 +27,10 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 from typing import Any
+
+from albra.config.settings import get_settings
 
 # Default expiry: 24h
 DEFAULT_TOKEN_EXPIRY_SECONDS = 86400
@@ -32,9 +46,10 @@ def _b64decode(s: str) -> bytes:
 
 
 def _get_secret() -> bytes:
-    """Lee ALBRA_JWT_SECRET del entorno. SIEMPRE debe configurarse en producción."""
-    secret = os.environ.get("ALBRA_JWT_SECRET", "change-me-in-production")
-    return secret.encode("utf-8")
+    """Lee ALBRA_JWT_SECRET vía Settings (fail-closed si falta)."""
+    # Settings.jwt_secret property raises InsecureConfigurationError
+    # si el secreto falta o es default conocido.
+    return get_settings().jwt_secret.encode("utf-8")
 
 
 def _sign(payload_b64: str, secret: bytes) -> str:
@@ -50,7 +65,10 @@ def issue_token(
     expires_in_seconds: int = DEFAULT_TOKEN_EXPIRY_SECONDS,
     extra_claims: dict[str, Any] | None = None,
 ) -> str:
-    """Emite un token firmado. El subject ya debe estar autenticado por otra vía."""
+    """Emite un HMAC signed bearer token.
+
+    El subject ya debe estar autenticado por otra vía (login + password).
+    """
     now = time.time()
     payload = {
         "sub": subject,
@@ -73,7 +91,6 @@ def verify_token(token: str) -> dict[str, Any] | None:
     if len(parts) != 2:
         return None
     payload_b64, signature = parts
-    # Re-computar firma esperada (constante-timing)
     expected_signature = _sign(payload_b64, _get_secret())
     if not hmac.compare_digest(signature, expected_signature):
         return None
@@ -81,7 +98,6 @@ def verify_token(token: str) -> dict[str, Any] | None:
         payload = json.loads(_b64decode(payload_b64).decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    # Check expiración
     if "exp" in payload and time.time() > payload["exp"]:
         return None
     if "sub" not in payload or "role" not in payload:
@@ -95,4 +111,4 @@ def revoke_token(token: str) -> bool:
     Para revocación real, integrar con redis blacklist o similar.
     Por ahora, rotar ALBRA_JWT_SECRET revoca todos los tokens.
     """
-    return False  # not supported without external store
+    return False

@@ -35,22 +35,51 @@ def test_doctor_detects_mock_provider():
 
 
 def test_security_login_and_authorize():
-    settings = Settings(admin_password="testpass")
-    gate = SecurityGate(settings)
-    # Login admin
-    ctx = asyncio.run(gate.login("admin", "testpass"))
-    assert ctx.authenticated is True
-    assert ctx.role == "admin"
-    # Authorize low-risk
-    authz = asyncio.run(gate.authorize("admin", action="chat", risk="low"))
-    assert authz.metadata.get("allowed") is True
+    """V1.6 P0.1: SecurityGate requires strong admin_password (no defaults)."""
+    import os
+
+    from albra.config.settings import reset_settings
+    # Inject strong ephemeral password via env
+    old = os.environ.get("ALBRA_ADMIN_PASSWORD")
+    os.environ["ALBRA_ADMIN_PASSWORD"] = "test-ephemeral-pass-1234"
+    reset_settings()
+    try:
+        settings = Settings()
+        gate = SecurityGate(settings)
+        # Login admin
+        ctx = asyncio.run(gate.login("admin", "test-ephemeral-pass-1234"))
+        assert ctx.authenticated is True
+        assert ctx.role == "admin"
+        # Authorize low-risk
+        authz = asyncio.run(gate.authorize("admin", action="chat", risk="low"))
+        assert authz.metadata.get("allowed") is True
+    finally:
+        reset_settings()
+        if old is None:
+            os.environ.pop("ALBRA_ADMIN_PASSWORD", None)
+        else:
+            os.environ["ALBRA_ADMIN_PASSWORD"] = old
 
 
 def test_security_wrong_password_fails():
-    settings = Settings()
-    gate = SecurityGate(settings)
-    ctx = asyncio.run(gate.login("admin", "wrong"))
-    assert ctx.authenticated is False
+    """V1.6 P0.1: requires strong admin_password."""
+    import os
+
+    from albra.config.settings import reset_settings
+    old = os.environ.get("ALBRA_ADMIN_PASSWORD")
+    os.environ["ALBRA_ADMIN_PASSWORD"] = "test-ephemeral-pass-1234"
+    reset_settings()
+    try:
+        settings = Settings()
+        gate = SecurityGate(settings)
+        ctx = asyncio.run(gate.login("admin", "wrong-password-attempt"))
+        assert ctx.authenticated is False
+    finally:
+        reset_settings()
+        if old is None:
+            os.environ.pop("ALBRA_ADMIN_PASSWORD", None)
+        else:
+            os.environ["ALBRA_ADMIN_PASSWORD"] = old
 
 
 def test_hitl_request_and_approve():
