@@ -239,5 +239,284 @@ def get_agent_settings():
     return Settings()
 
 
+# ============================================================
+# V2.0 — Despacho Jurídico (Matters, Agents, Pending, Audit)
+# ============================================================
+
+
+@main.group()
+def matter() -> None:
+    """Gestión de matters (expedientes digitales) V2.0."""
+
+
+@matter.command("new")
+@click.option("--client", required=True, help="Nombre del cliente")
+@click.option("--area", required=True,
+              type=click.Choice([
+                  "civil", "constitucional", "laboral", "penal",
+                  "corporativo", "administrativo", "familia"
+              ]),
+              help="Área de práctica")
+@click.option("--parties", default="", help="Lista separada por comas")
+@click.option("--created-by", default="cli", help="Usuario que crea")
+def matter_new(client, area, parties, created_by):
+    """Crea un matter nuevo (state=NUEVO)."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    from albra.matters.timeline import MatterTimeline
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    timeline = MatterTimeline(s.matter_data_dir)
+    party_list = [p.strip() for p in parties.split(",") if p.strip()] if parties else []
+    m = store.create_matter(
+        client=client, area=area, parties=party_list, created_by=created_by,
+    )
+    timeline.append(m.id, actor=created_by, event_type="created",
+                    description=f"Matter creado para {client} ({area})")
+    click.echo(f"Matter created: {m.id}")
+    click.echo(f"  client: {m.client}")
+    click.echo(f"  area:   {m.area}")
+    click.echo(f"  state:  {m.state}")
+    click.echo(f"  parties: {m.parties}")
+    store.close()
+
+
+@matter.command("list")
+@click.option("--status", default=None, help="Filtrar por estado")
+@click.option("--area", default=None, help="Filtrar por área")
+@click.option("--client", default=None, help="Filtrar por cliente (substring)")
+def matter_list(status, area, client):
+    """Lista matters (filtros opcionales)."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    matters = store.list_matters(state=status, area=area, client=client)
+    if not matters:
+        click.echo("No matters found.")
+        return
+    click.echo(f"{'ID':<34} {'CLIENT':<25} {'AREA':<15} {'STATE':<28}")
+    click.echo("-" * 110)
+    for m in matters:
+        click.echo(f"{m.id:<34} {m.client[:25]:<25} {m.area:<15} {m.state:<28}")
+    click.echo(f"\nTotal: {len(matters)} matter(s)")
+    store.close()
+
+
+@matter.command("show")
+@click.argument("matter_id")
+def matter_show(matter_id):
+    """Muestra detalle de un matter."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    m = store.get_matter(matter_id)
+    if not m:
+        click.echo(f"Matter not found: {matter_id}")
+        sys.exit(1)
+    click.echo(json.dumps(m.as_dict(), indent=2, ensure_ascii=False, default=str))
+    store.close()
+
+
+@matter.command("advance")
+@click.argument("matter_id")
+@click.argument("target")
+@click.option("--by", default="cli", help="Usuario que avanza")
+@click.option("--reason", default="", help="Razón de la transición")
+def matter_advance(matter_id, target, by, reason):
+    """Avanza el state machine del matter (monótono)."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    from albra.matters.timeline import MatterTimeline
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    timeline = MatterTimeline(s.matter_data_dir)
+    try:
+        m = store.advance_state(matter_id, target, by=by, reason=reason)
+        timeline.append(m.id, actor=by, event_type="state_change",
+                        description=f"→ {target}: {reason or 'manual'}")
+        click.echo(f"Matter advanced: {m.id} → {m.state}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    store.close()
+
+
+@matter.command("timeline")
+@click.argument("matter_id")
+def matter_timeline(matter_id):
+    """Muestra el timeline.jsonl del matter."""
+    from albra.config.settings import Settings
+    from albra.matters.timeline import MatterTimeline
+    s = Settings()
+    timeline = MatterTimeline(s.matter_data_dir)
+    events = timeline.read(matter_id)
+    if not events:
+        click.echo(f"No timeline events for matter: {matter_id}")
+        return
+    click.echo(f"Timeline for matter {matter_id} ({len(events)} events):")
+    click.echo()
+    for e in events:
+        click.echo(f"[{e['ts']}] {e['actor']:15s} {e['event_type']:15s} {e['description']}")
+
+
+@matter.command("audit")
+@click.argument("matter_id")
+def matter_audit(matter_id):
+    """Verifica el hash chain del audit log del matter."""
+    from albra.audit.matter_audit import MatterAudit
+    from albra.config.settings import Settings
+    s = Settings()
+    audit = MatterAudit(s.matter_data_dir)
+    result = audit.verify_chain(matter_id)
+    click.echo(json.dumps(result, indent=2))
+    if result["ok"]:
+        click.echo(f"\n✓ Hash chain verified: {result['total']} entries, no tampering detected.")
+    else:
+        click.echo(f"\n✗ Hash chain BROKEN at entries: {result['broken_at']}", err=True)
+        click.echo("  Audit trail tampering detected.", err=True)
+    click.echo(f"\nFingerprint: {audit.fingerprint(matter_id)}")
+
+
+@main.group()
+def agent() -> None:
+    """Gestión del organigrama de agentes V2.0."""
+
+
+@agent.command("list")
+def agent_list():
+    """Lista los agentes del organigrama."""
+    from albra.agents.loader import AgentLoader
+    loader = AgentLoader()
+    agents = loader.load_all()
+    if not agents:
+        click.echo("No agents loaded.")
+        return
+    click.echo(f"{'ID':<18} {'NAME':<18} {'TIER':<12} {'REPORTS_TO':<18} {'SIGNOFF'}")
+    click.echo("-" * 80)
+    for a in sorted(agents.values(), key=lambda x: x.id):
+        click.echo(f"{a.id:<18} {a.name:<18} {a.tier:<12} {a.reports_to:<18} {a.minimum_human_signoff}")
+    click.echo(f"\nTotal: {len(agents)} agents")
+
+
+@agent.command("show")
+@click.argument("agent_id")
+def agent_show(agent_id):
+    """Muestra un agente (markdown + YAML frontmatter)."""
+    from albra.agents.loader import AgentLoader
+    loader = AgentLoader()
+    a = loader.get(agent_id)
+    if not a:
+        click.echo(f"Agent not found: {agent_id}")
+        sys.exit(1)
+    click.echo(json.dumps(a.as_dict(), indent=2, ensure_ascii=False, default=str))
+
+
+@agent.command("reload")
+def agent_reload():
+    """Recarga definiciones desde disco."""
+    from albra.agents.loader import AgentLoader
+    loader = AgentLoader()
+    agents = loader.reload()
+    click.echo(f"Reloaded {len(agents)} agents: {sorted(agents.keys())}")
+
+
+@main.group(name="pending")
+def pending_group() -> None:
+    """Acciones pendientes de aprobación (AWAITING-PARTNER) V2.0."""
+
+
+@pending_group.command("list")
+@click.option("--matter", default=None, help="Filtrar por matter_id")
+def pending_list(matter):
+    """Lista acciones pendientes de aprobación."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    pending = store.list_pending(matter_id=matter)
+    if not pending:
+        click.echo("No pending actions.")
+        return
+    click.echo(f"{'ID':<34} {'MATTER':<34} {'TYPE':<25} {'SIGNOFF'}")
+    click.echo("-" * 100)
+    for a in pending:
+        click.echo(f"{a['id']:<34} {a['matter_id']:<34} {a['action_type']:<25} "
+                   f"{len(a['approvals'])}/{a['minimum_human_signoff']}")
+    click.echo(f"\nTotal: {len(pending)} pending action(s)")
+    store.close()
+
+
+@pending_group.command("approve")
+@click.argument("action_id")
+@click.option("--by", required=True, help="Usuario que firma")
+@click.option("--role", required=True,
+              type=click.Choice(["paralegal", "abogado", "socio", "cliente"]),
+              help="Rol del firmante")
+@click.option("--comment", default="", help="Comentario de la firma")
+def pending_approve(action_id, by, role, comment):
+    """Firma una acción pendiente (approval chain)."""
+    from albra.config.settings import Settings
+    from albra.matters.store import MatterStore
+    from albra.security.approval_chain import (
+        ApprovalChain,
+        ApprovalChainError,
+        UnauthorizedRoleError,
+    )
+    s = Settings()
+    store = MatterStore(s.matter_db_path)
+    chain = ApprovalChain(store)
+    try:
+        updated = chain.approve(action_id, by=by, role=role, comment=comment)
+        click.echo(f"Approved. Status: {updated['status']}")
+        click.echo(f"  approvals: {len(updated['approvals'])}/{updated['minimum_human_signoff']}")
+    except UnauthorizedRoleError as e:
+        click.echo(f"Unauthorized: {e}", err=True)
+        sys.exit(2)
+    except ApprovalChainError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    store.close()
+
+
+@main.command()
+@click.argument("text")
+@click.option("--matter", default=None, help="matter_id para contexto")
+def research(text, matter):
+    """RESEARCH-AGENT con citation audit pre-reveal fail-closed.
+
+    Audita el texto proporcionado y reporta si las citas que contiene
+    pasan el pipeline extract -> validate -> retrace -> reveal_or_block.
+    """
+    from albra.knowledge.citation_audit import CitationAuditor
+    auditor = CitationAuditor()
+    result = auditor.audit_response(text)
+    click.echo("\nResearch audit:")
+    if matter:
+        click.echo(f"  Matter context: {matter}")
+    click.echo(f"  total_citations: {result.total_citations}")
+    click.echo(f"  verified: {len(result.verified)}")
+    click.echo(f"  unverified: {len(result.unverified)}")
+    click.echo(f"  rejected: {len(result.rejected)}")
+    click.echo(f"  revealed: {result.revealed}")
+    click.echo(f"\nReason: {result.reason}")
+    if not result.revealed:
+        click.echo("\n[BLOCKED — fail-closed anti-hallucination]")
+        if result.unverified:
+            click.echo("\nUnverified citations:")
+            for c in result.unverified:
+                click.echo(f"  - {c.document_name} (article={c.article_number})")
+        if result.rejected:
+            click.echo("\nRejected (honestly) citations:")
+            for c in result.rejected:
+                click.echo(f"  - {c.document_name}")
+    else:
+        if result.verified:
+            click.echo("\nVerified citations:")
+            for c in result.verified:
+                click.echo(f"  - {c.document_name} (article={c.article_number})")
+
+
 if __name__ == "__main__":
     main()

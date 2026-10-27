@@ -126,6 +126,10 @@ class Settings:
     log_format: str = field(default_factory=lambda: str(_env("ALBRA_LOG_FORMAT", "console")))
     audit_path: str = field(default_factory=lambda: str(_env("ALBRA_AUDIT_PATH", "./data/audit.log")))
 
+    # V2.0 — Matters (SQLite + JSONL filesystem)
+    matter_db_path: str = field(default_factory=lambda: str(_env("ALBRA_MATTER_DB_PATH", "./data/matters.db")))
+    matter_data_dir: str = field(default_factory=lambda: str(_env("ALBRA_MATTER_DATA_DIR", "./data/matters")))
+
     # Knowledge
     knowledge_jurisdiction: str = field(default_factory=lambda: str(_env("ALBRA_KNOWLEDGE_JURISDICTION", "CO")))
     knowledge_path: str = field(default_factory=lambda: str(_env("ALBRA_KNOWLEDGE_PATH", "./data/knowledge")))
