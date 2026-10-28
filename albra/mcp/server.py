@@ -807,28 +807,6 @@ class McpServer:
                 "guard_checks": [c.name + ":" + str(c.ok) for c in guard_verdict.checks],
             }
 
-        # 3. LegalGate BLOCKED check (separate from guard)
-        if legal_verdict.verdict == "BLOCKED":
-            lg_reason = f"LEGAL GATE BLOCKED: {legal_verdict.reason}"
-            entry = _make_audit_entry(
-                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
-                role=auth_context.role, auth_method=auth_context.auth_method,
-                tool_name=name, action="mcp.tool.call", authorization_result="DENIED",
-                denial_reason=lg_reason,
-                input_hash=_hash_dict(args), output_hash="", matter_id="",
-                correlation_id=auth_context.request_id,
-                result_status="denied", error=lg_reason,
-                latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
-            )
-            if self._mcp_audit is not None:
-                self._mcp_audit.record(entry)
-            return {
-                "error": lg_reason,
-                "status": "DENIED",
-                "authorization": "DENIED",
-                "reason": legal_verdict.reason,
-            }
-
         # Execute tool handler
         try:
             result = self.tools[name]["handler"](args)
