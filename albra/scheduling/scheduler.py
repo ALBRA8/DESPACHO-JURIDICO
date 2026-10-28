@@ -134,6 +134,12 @@ class Scheduler:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._started = False
+        # Block M — idempotency: track executed job_ids so a second fire_event
+        # for the same (event, handler) pair is a no-op. job_id format:
+        # f"{event}:{trigger_id}" (trigger_id is the de-facto handler_name).
+        # Note: tick()-driven timed jobs do NOT go through fire_event and are
+        # NOT subject to this dedup (they have their own re-queue logic).
+        self._executed_jobs: set[str] = set()
 
     # ===== internal helpers =====
 
@@ -213,8 +219,15 @@ class Scheduler:
     def fire_event(self, event: str, payload: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Dispara `event` con `payload` a todos los handlers registrados.
 
+        Idempotency (Block M): each (event, trigger_id) pair is tracked in
+        `_executed_jobs`. A second `fire_event` for the same event will SKIP
+        any handler whose job_id has already been executed. To re-enable
+        firing, call `reset_executed()` (typically only in tests).
+
         Returns: lista de results dicts ({trigger_id, ok, result|error}) en orden
         de registro. Si un handler levanta excepción, no bloquea a los demás.
+        Handlers that are skipped due to idempotency do NOT appear in the
+        returned list.
         """
         payload = payload or {}
         results: list[dict[str, Any]] = []
@@ -223,6 +236,17 @@ class Scheduler:
             trig = self._triggers.get(tid)
             if not trig:
                 continue
+            job_id = f"{event}:{tid}"
+            if job_id in self._executed_jobs:
+                # Idempotent skip — already executed for this (event, handler).
+                self.log.info(
+                    "scheduler.fire_event.skip_idempotent",
+                    event=event, job_id=job_id,
+                )
+                continue
+            # Mark as executed BEFORE running so a failed handler does not retry
+            # on a second fire_event (at-least-once idempotency model).
+            self._executed_jobs.add(job_id)
             res = self._run_handler(trig, payload)
             results.append(res)
         self.log.info(
@@ -231,6 +255,24 @@ class Scheduler:
             handlers_run=len(results),
         )
         return results
+
+    def is_executed(self, job_id: str) -> bool:
+        """True si el job_id ya fue ejecutado (idempotency tracking).
+
+        job_id format: f"{event}:{trigger_id}". Useful for tests to assert
+        that fire_event registered the job in the executed set.
+        """
+        return job_id in self._executed_jobs
+
+    def reset_executed(self) -> None:
+        """Limpia el set de jobs ejecutados — principalmente para testing.
+
+        Permite re-firear el mismo evento en el mismo Scheduler instance
+        (e.g. para testear idempotency o re-run scenarios).
+        """
+        cleared = len(self._executed_jobs)
+        self._executed_jobs.clear()
+        self.log.info("scheduler.reset_executed", cleared=cleared)
 
     def _run_handler(self, trig: Trigger, payload: dict[str, Any]) -> dict[str, Any]:
         """Ejecuta un handler, captura excepciones, actualiza last_* y run_count."""

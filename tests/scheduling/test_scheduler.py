@@ -310,3 +310,127 @@ def test_interval_trigger_can_be_advanced(sched):
     r2 = sched.tick()
     assert len(r2) == 1
     assert len(calls) == 2
+
+
+# ===== Block M: idempotency =====
+
+
+def test_fire_event_idempotent(sched):
+    """fire_event es idempotente: segundo disparo del mismo evento NO re-ejecuta
+    handlers ya ejecutados (job_id = f"{event}:{trigger_id}" en _executed_jobs).
+    """
+    call_count = {"n": 0}
+
+    def handler(payload):
+        call_count["n"] += 1
+        return {"ok": True}
+
+    tid = sched.register_trigger(ON_MATTER_CREATED, handler)
+    job_id = f"{ON_MATTER_CREATED}:{tid}"
+
+    # First fire → handler runs once.
+    r1 = sched.fire_event(ON_MATTER_CREATED, {"matter_id": "M1"})
+    assert len(r1) == 1
+    assert r1[0]["ok"] is True
+    assert call_count["n"] == 1
+    # Job was registered as executed.
+    assert sched.is_executed(job_id) is True
+
+    # Second fire with different payload → idempotent skip, handler NOT retried.
+    r2 = sched.fire_event(ON_MATTER_CREATED, {"matter_id": "M2"})
+    assert r2 == []  # skipped handler is not in results
+    assert call_count["n"] == 1  # still 1
+
+
+def test_reset_executed(sched):
+    """reset_executed() limpia el set de jobs ejecutados — siguiente fire_event
+    vuelve a correr el handler.
+    """
+    call_count = {"n": 0}
+
+    def handler(payload):
+        call_count["n"] += 1
+        return {}
+
+    tid = sched.register_trigger(ON_STATE_CHANGE, handler)
+    job_id = f"{ON_STATE_CHANGE}:{tid}"
+
+    sched.fire_event(ON_STATE_CHANGE, {"matter_id": "M1"})
+    assert call_count["n"] == 1
+    assert sched.is_executed(job_id) is True
+
+    # Second fire — skipped (idempotent).
+    sched.fire_event(ON_STATE_CHANGE, {"matter_id": "M2"})
+    assert call_count["n"] == 1
+
+    # After reset_executed — next fire runs the handler again.
+    sched.reset_executed()
+    assert sched.is_executed(job_id) is False
+    sched.fire_event(ON_STATE_CHANGE, {"matter_id": "M3"})
+    assert call_count["n"] == 2
+
+
+def test_is_executed(sched):
+    """is_executed(job_id) True/False segun si el job ya fue disparado."""
+    def handler(payload):
+        return {}
+
+    tid = sched.register_trigger(ON_DEADLINE_NEAR, handler)
+    job_id = f"{ON_DEADLINE_NEAR}:{tid}"
+    other_job_id = f"{ON_DEADLINE_NEAR}:other-trigger-id"
+
+    # Before fire — not executed.
+    assert sched.is_executed(job_id) is False
+    assert sched.is_executed(other_job_id) is False
+
+    # Fire — registers job_id.
+    sched.fire_event(ON_DEADLINE_NEAR, {"days_left": 25})
+
+    # After fire — job_id is executed, other is not.
+    assert sched.is_executed(job_id) is True
+    assert sched.is_executed(other_job_id) is False
+
+
+def test_fire_event_idempotent_multiple_handlers(sched):
+    """Idempotency respeta cada (event, handler) pair de forma independiente —
+    si h1 ya fue ejecutado pero h2 no (e.g. h2 registrado después del primer fire),
+    el segundo fire solo corre h2.
+    """
+    log: list[str] = []
+
+    def h1(payload):
+        log.append("h1")
+        return {}
+
+    tid1 = sched.register_trigger(ON_APPROVAL_PENDING, h1)
+    job1 = f"{ON_APPROVAL_PENDING}:{tid1}"
+
+    # First fire — only h1 registered. h1 runs, job1 executed.
+    sched.fire_event(ON_APPROVAL_PENDING, {"action_id": "A1"})
+    assert log == ["h1"]
+    assert sched.is_executed(job1) is True
+
+    # Now register h2 (after first fire).
+    def h2(payload):
+        log.append("h2")
+        return {}
+
+    tid2 = sched.register_trigger(ON_APPROVAL_PENDING, h2)
+    job2 = f"{ON_APPROVAL_PENDING}:{tid2}"
+
+    # Second fire — h1 skipped (idempotent), h2 runs (new job).
+    results = sched.fire_event(ON_APPROVAL_PENDING, {"action_id": "A2"})
+    assert log == ["h1", "h2"]
+    assert len(results) == 1
+    assert results[0]["trigger_id"] == tid2
+    assert sched.is_executed(job2) is True
+
+
+def test_fire_event_unknown_event_not_tracked(sched):
+    """fire_event con evento sin handlers no registra nada en _executed_jobs."""
+    assert sched.fire_event("nonexistent_event") == []
+    # No job_ids should have been added.
+    assert sched.is_executed("nonexistent_event:anything") is False
+    # Empty set means reset is also safe.
+    sched.reset_executed()
+    assert sched.fire_event("nonexistent_event") == []

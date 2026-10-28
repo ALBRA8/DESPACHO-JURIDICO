@@ -43,6 +43,25 @@ from typing import Any
 from albra.knowledge.rag_local import _tokenize
 from albra.observability.logger import get_logger
 
+# ===== Trust-level constants (Block L — provenance/trust/authority) =====
+TRUST_VERIFIED = "VERIFIED"
+TRUST_UNVERIFIED = "UNVERIFIED"
+TRUST_OBSERVATION = "OBSERVATION"
+TRUST_SPECULATIVE = "SPECULATIVE"
+
+TRUST_LEVELS: frozenset[str] = frozenset(
+    {
+        TRUST_VERIFIED,
+        TRUST_UNVERIFIED,
+        TRUST_OBSERVATION,
+        TRUST_SPECULATIVE,
+    }
+)
+
+# Default trust level when remember() is called without explicit provenance.
+# Conservative default: UNVERIFIED (caller must opt-in to VERIFIED).
+DEFAULT_TRUST_LEVEL = TRUST_UNVERIFIED
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -115,10 +134,27 @@ class MemoryCell:
                 event_type TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
                 agent TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                trust_level TEXT NOT NULL DEFAULT 'UNVERIFIED',
+                authority_source TEXT NOT NULL DEFAULT '',
+                provenance_ref TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        # Migration: add provenance columns to pre-existing DBs (Block L).
+        # CREATE TABLE IF NOT EXISTS does NOT add new columns to existing tables,
+        # so we do an additive ALTER TABLE migration guarded by PRAGMA table_info.
+        cur_mig = self._conn.execute("PRAGMA table_info(memory_cells)")
+        existing_cols = {row[1] for row in cur_mig.fetchall()}
+        for col, ddl in (
+            ("trust_level", "TEXT NOT NULL DEFAULT 'UNVERIFIED'"),
+            ("authority_source", "TEXT NOT NULL DEFAULT ''"),
+            ("provenance_ref", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in existing_cols:
+                self._conn.execute(
+                    f"ALTER TABLE memory_cells ADD COLUMN {col} {ddl}"
+                )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_cells_area ON memory_cells(area)"
         )
@@ -129,6 +165,10 @@ class MemoryCell:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_cells_matter "
             "ON memory_cells(matter_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mem_cells_trust "
+            "ON memory_cells(trust_level)"
         )
         self._conn.commit()
         self.log.info("memory_cell.sqlite.ready", path=str(self.db_path))
@@ -154,6 +194,9 @@ class MemoryCell:
         payload: dict[str, Any] | None,
         area: str | None = None,
         agent: str | None = None,
+        trust_level: str = DEFAULT_TRUST_LEVEL,
+        authority_source: str = "",
+        provenance_ref: str = "",
     ) -> str:
         """Captura un evento del despacho como celda de memoria.
 
@@ -164,10 +207,25 @@ class MemoryCell:
             payload: dict con la info del evento (e.g. {"sequence": "..."}).
             area: área de práctica del matter (e.g. "laboral", "civil").
             agent: agente que capturó la memoria (e.g. "intake-agent").
+            trust_level: nivel de confianza (VERIFIED | UNVERIFIED |
+                OBSERVATION | SPECULATIVE). Default UNVERIFIED — caller must
+                opt-in to VERIFIED with explicit provenance_ref.
+            authority_source: quién autoriza la memoria (matter_id, agent_name,
+                o "human"). Vacío → sin autoridad declarada.
+            provenance_ref: referencia a la fuente (citation_id, matter_id,
+                URL, hash del documento, etc.). Vacío → sin source trazable.
 
         Returns:
             cell_id (str, 24 chars hex).
+
+        Raises:
+            ValueError: si trust_level no es uno de los TRUST_LEVELS válidos.
         """
+        if trust_level not in TRUST_LEVELS:
+            raise ValueError(
+                f"trust_level must be one of {sorted(TRUST_LEVELS)}, "
+                f"got: {trust_level!r}"
+            )
         cell_id = uuid.uuid4().hex[:24]
         payload_json = json.dumps(payload or {}, ensure_ascii=False)
         now = _utcnow_iso()
@@ -176,9 +234,13 @@ class MemoryCell:
                 raise RuntimeError("MemoryCell is closed")
             cur.execute(
                 "INSERT INTO memory_cells "
-                "(id, matter_id, area, event_type, payload_json, agent, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (cell_id, matter_id, area, event_type, payload_json, agent, now),
+                "(id, matter_id, area, event_type, payload_json, agent, "
+                "created_at, trust_level, authority_source, provenance_ref) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    cell_id, matter_id, area, event_type, payload_json,
+                    agent, now, trust_level, authority_source, provenance_ref,
+                ),
             )
         self.log.info(
             "memory_cell.remember",
@@ -186,8 +248,56 @@ class MemoryCell:
             event_type=event_type,
             area=area,
             agent=agent,
+            trust_level=trust_level,
+            authority_source=authority_source,
+            provenance_ref=provenance_ref,
         )
         return cell_id
+
+    def get_cell(self, cell_id: str) -> dict[str, Any] | None:
+        """Recupera una celda por id (incluye campos de provenance).
+
+        Returns None si la celda no existe.
+        """
+        if self._conn is None:
+            return None
+        cur = self._conn.cursor()
+        try:
+            cur.execute(
+                "SELECT id, matter_id, area, event_type, payload_json, agent, "
+                "created_at, trust_level, authority_source, provenance_ref "
+                "FROM memory_cells WHERE id = ?",
+                (cell_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+        if not row:
+            return None
+        return {
+            "cell_id": row[0],
+            "matter_id": row[1],
+            "area": row[2],
+            "event_type": row[3],
+            "payload": json.loads(row[4]) if row[4] else {},
+            "agent": row[5],
+            "created_at": row[6],
+            "trust_level": row[7],
+            "authority_source": row[8],
+            "provenance_ref": row[9],
+        }
+
+    def is_trustworthy(self, cell_id: str) -> bool:
+        """True solo si la celda existe y su trust_level == "VERIFIED".
+
+        Unverified / observation / speculative memories return False. This is
+        the canonical trust gate for cross-matter recall usage in
+        downstream agents — only VERIFIED memories should drive action.
+        """
+        cell = self.get_cell(cell_id)
+        if cell is None:
+            return False
+        return cell["trust_level"] == TRUST_VERIFIED
 
     # ===== RETRIEVE: recall (TF-IDF + cosine, cross-matter) =====
 
@@ -221,13 +331,15 @@ class MemoryCell:
             if area is not None:
                 cur.execute(
                     "SELECT id, matter_id, area, event_type, payload_json, "
-                    "agent, created_at FROM memory_cells WHERE area = ?",
+                    "agent, created_at, trust_level, authority_source, "
+                    "provenance_ref FROM memory_cells WHERE area = ?",
                     (area,),
                 )
             else:
                 cur.execute(
                     "SELECT id, matter_id, area, event_type, payload_json, "
-                    "agent, created_at FROM memory_cells"
+                    "agent, created_at, trust_level, authority_source, "
+                    "provenance_ref FROM memory_cells"
                 )
             rows = cur.fetchall()
         finally:
@@ -303,6 +415,9 @@ class MemoryCell:
                 "payload": json.loads(r[4]) if r[4] else {},
                 "agent": r[5],
                 "created_at": r[6],
+                "trust_level": r[7],
+                "authority_source": r[8],
+                "provenance_ref": r[9],
                 "score": score,
             })
             if len(results) >= k:

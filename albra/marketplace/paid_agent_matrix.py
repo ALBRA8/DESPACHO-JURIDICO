@@ -57,6 +57,19 @@ from typing import Any
 
 from albra.observability.logger import get_logger
 
+# ===== Block N — explicit billing vs settlement separation =====
+# Billing status: estado del ciclo de facturación desde el punto de vista del
+# cobro al cliente (¿se emitió factura? ¿se pagó? ¿venció?).
+BILLING_STATUS: frozenset[str] = frozenset({"pending", "billed", "overdue"})
+# (Note: legacy BillingCycle.status uses "open"/"invoiced"/"paid"/"overdue"
+# for backward compatibility with V2.5-C — these map conceptually to the
+# BILLING_STATUS lifecycle. New code SHOULD distinguish billing from
+# settlement explicitly.)
+# Settlement status: estado del settlement on-chain (USDC tx). ¿Se envió la
+# transacción? ¿Se confirmó? ¿Falló? SEPARATE concern from billing — a cycle
+# may be "billed" (invoice sent) but "unsettled" (no USDC tx confirmed yet).
+SETTLEMENT_STATUS: frozenset[str] = frozenset({"unsettled", "settled", "failed"})
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -108,14 +121,26 @@ class UsageRecord:
 
 @dataclass
 class BillingCycle:
-    """Ciclo de facturación mensual de un tenant."""
+    """Ciclo de facturación mensual de un tenant.
+
+    Block N: billing status (legacy `status` field, backward-compat with
+    V2.5-C: open | invoiced | paid | overdue) and settlement status
+    (`settlement_status`: unsettled | settled | failed) are SEPARATE concerns.
+    A cycle may be `status="paid"` (client paid the invoice) but
+    `settlement_status="unsettled"` (USDC tx not yet confirmed on-chain).
+    `mark_paid` does NOT auto-mark settled — `mark_settled(tx_hash)` must be
+    called explicitly when the USDC transaction is confirmed.
+    """
     id: str
     tenant_id: str
     period_start: str
     period_end: str
     total_usd: float = 0.0
-    status: str = "open"  # open | invoiced | paid | overdue
+    status: str = "open"  # open | invoiced | paid | overdue  (billing lifecycle)
     invoice_url: str = ""
+    # Block N — separate settlement concern (USDC on-chain settlement)
+    settlement_status: str = "unsettled"
+    settlement_tx_hash: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -126,6 +151,8 @@ class BillingCycle:
             "total_usd": self.total_usd,
             "status": self.status,
             "invoice_url": self.invoice_url,
+            "settlement_status": self.settlement_status,
+            "settlement_tx_hash": self.settlement_tx_hash,
         }
 
 
@@ -175,7 +202,9 @@ class PaidAgentMatrix:
                 period_end TEXT NOT NULL,
                 total_usd REAL NOT NULL DEFAULT 0.0,
                 status TEXT NOT NULL DEFAULT 'open',
-                invoice_url TEXT NOT NULL DEFAULT ''
+                invoice_url TEXT NOT NULL DEFAULT '',
+                settlement_status TEXT NOT NULL DEFAULT 'unsettled',
+                settlement_tx_hash TEXT NOT NULL DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage_records(tenant_id);
@@ -183,8 +212,21 @@ class PaidAgentMatrix:
             CREATE INDEX IF NOT EXISTS idx_usage_status ON usage_records(status);
             CREATE INDEX IF NOT EXISTS idx_billing_tenant ON billing_cycles(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_billing_status ON billing_cycles(status);
+            CREATE INDEX IF NOT EXISTS idx_billing_settlement
+                ON billing_cycles(settlement_status);
             """
         )
+        # Block N migration — add settlement columns to pre-existing DBs.
+        cur_mig = self._conn.execute("PRAGMA table_info(billing_cycles)")
+        existing_cols = {row[1] for row in cur_mig.fetchall()}
+        for col, ddl in (
+            ("settlement_status", "TEXT NOT NULL DEFAULT 'unsettled'"),
+            ("settlement_tx_hash", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in existing_cols:
+                self._conn.execute(
+                    f"ALTER TABLE billing_cycles ADD COLUMN {col} {ddl}"
+                )
         self._conn.commit()
 
     # ===== Service matrix =====
@@ -392,7 +434,8 @@ class PaidAgentMatrix:
 
         # Buscar ciclo existente
         cur = self._conn.execute(
-            "SELECT id, tenant_id, period_start, period_end, total_usd, status, invoice_url "
+            "SELECT id, tenant_id, period_start, period_end, total_usd, status, "
+            "invoice_url, settlement_status, settlement_tx_hash "
             "FROM billing_cycles WHERE tenant_id = ? AND period_start = ?",
             (tenant_id, period_start_iso),
         )
@@ -401,23 +444,29 @@ class PaidAgentMatrix:
             return BillingCycle(
                 id=row[0], tenant_id=row[1], period_start=row[2],
                 period_end=row[3], total_usd=row[4], status=row[5],
-                invoice_url=row[6],
+                invoice_url=row[6], settlement_status=row[7],
+                settlement_tx_hash=row[8],
             )
         # Crear nuevo ciclo
         cycle_id = uuid.uuid4().hex
         self._conn.execute(
             """
             INSERT INTO billing_cycles
-            (id, tenant_id, period_start, period_end, total_usd, status, invoice_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, tenant_id, period_start, period_end, total_usd, status,
+             invoice_url, settlement_status, settlement_tx_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (cycle_id, tenant_id, period_start_iso, period_end_iso, 0.0, "open", ""),
+            (
+                cycle_id, tenant_id, period_start_iso, period_end_iso,
+                0.0, "open", "", "unsettled", "",
+            ),
         )
         self._conn.commit()
         return BillingCycle(
             id=cycle_id, tenant_id=tenant_id,
             period_start=period_start_iso, period_end=period_end_iso,
             total_usd=0.0, status="open", invoice_url="",
+            settlement_status="unsettled", settlement_tx_hash="",
         )
 
     def close_billing_cycle(self, cycle_id: str) -> BillingCycle:
@@ -456,7 +505,8 @@ class PaidAgentMatrix:
             total_usd=total,
         )
         cur_updated = self._conn.execute(
-            "SELECT id, tenant_id, period_start, period_end, total_usd, status, invoice_url "
+            "SELECT id, tenant_id, period_start, period_end, total_usd, status, "
+            "invoice_url, settlement_status, settlement_tx_hash "
             "FROM billing_cycles WHERE id = ?",
             (cycle_id,),
         )
@@ -464,16 +514,24 @@ class PaidAgentMatrix:
         return BillingCycle(
             id=r[0], tenant_id=r[1], period_start=r[2], period_end=r[3],
             total_usd=r[4], status=r[5], invoice_url=r[6],
+            settlement_status=r[7], settlement_tx_hash=r[8],
         )
 
     def mark_paid(self, cycle_id: str, invoice_url: str = "") -> BillingCycle:
-        """Marca un ciclo como pagado (USDC settlement received)."""
+        """Marca un ciclo como pagado (billing-side — client paid the invoice).
+
+        Block N: This ONLY updates the billing-side status (status="paid" +
+        invoice_url). It does NOT touch settlement_status — a paid invoice
+        is not the same as a confirmed USDC settlement. Callers must use
+        `mark_settled(tx_hash)` separately when the on-chain USDC transaction
+        is confirmed.
+        """
         self._conn.execute(
             "UPDATE billing_cycles SET status = 'paid', invoice_url = ? WHERE id = ?",
             (invoice_url, cycle_id),
         )
         self._conn.commit()
-        # Mark usage records as paid too
+        # Mark usage records as paid too (billing-side only).
         cur = self._conn.execute(
             "SELECT tenant_id, period_start, period_end FROM billing_cycles WHERE id = ?",
             (cycle_id,),
@@ -489,7 +547,8 @@ class PaidAgentMatrix:
             self._conn.commit()
         # Return updated
         cur_updated = self._conn.execute(
-            "SELECT id, tenant_id, period_start, period_end, total_usd, status, invoice_url "
+            "SELECT id, tenant_id, period_start, period_end, total_usd, status, "
+            "invoice_url, settlement_status, settlement_tx_hash "
             "FROM billing_cycles WHERE id = ?",
             (cycle_id,),
         )
@@ -497,6 +556,56 @@ class PaidAgentMatrix:
         return BillingCycle(
             id=r[0], tenant_id=r[1], period_start=r[2], period_end=r[3],
             total_usd=r[4], status=r[5], invoice_url=r[6],
+            settlement_status=r[7], settlement_tx_hash=r[8],
+        )
+
+    def mark_settled(self, cycle_id: str, tx_hash: str) -> BillingCycle:
+        """Marca el settlement del ciclo como confirmado on-chain (Block N).
+
+        Esto es SEPARADO de mark_paid:
+        - mark_paid: el cliente pagó la factura (billing-side status="paid").
+        - mark_settled: la transacción USDC on-chain fue confirmada
+          (settlement-side settlement_status="settled" + tx_hash).
+
+        Un ciclo puede estar "paid" pero no "settled" (e.g. pago fiat pendiente
+        de convertirse a USDC) o "settled" sin "paid" (e.g. settlement manual
+        sin pasar por el flujo de invoice).
+
+        Args:
+            cycle_id: id del billing cycle.
+            tx_hash: hash de la transacción USDC on-chain.
+
+        Raises:
+            KeyError: si el cycle_id no existe.
+        """
+        cur = self._conn.execute(
+            "SELECT id FROM billing_cycles WHERE id = ?",
+            (cycle_id,),
+        )
+        if cur.fetchone() is None:
+            raise KeyError(f"Billing cycle not found: {cycle_id}")
+        self._conn.execute(
+            "UPDATE billing_cycles "
+            "SET settlement_status = 'settled', settlement_tx_hash = ? "
+            "WHERE id = ?",
+            (tx_hash, cycle_id),
+        )
+        self._conn.commit()
+        self.log.info(
+            "paid_agent_matrix.cycle_settled",
+            cycle_id=cycle_id, tx_hash=tx_hash,
+        )
+        cur_updated = self._conn.execute(
+            "SELECT id, tenant_id, period_start, period_end, total_usd, status, "
+            "invoice_url, settlement_status, settlement_tx_hash "
+            "FROM billing_cycles WHERE id = ?",
+            (cycle_id,),
+        )
+        r = cur_updated.fetchone()
+        return BillingCycle(
+            id=r[0], tenant_id=r[1], period_start=r[2], period_end=r[3],
+            total_usd=r[4], status=r[5], invoice_url=r[6],
+            settlement_status=r[7], settlement_tx_hash=r[8],
         )
 
     # ===== Stats =====

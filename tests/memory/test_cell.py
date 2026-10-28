@@ -306,3 +306,125 @@ def test_persistence_across_connections(strong_secrets, tmp_path: Path):
     assert hits[0]["cell_id"] == cid
     assert hits[0]["area"] == "laboral"
     cell2.close()
+
+
+# ===== Block L: provenance / trust / authority =====
+
+
+def test_remember_with_trust_level(cell: MemoryCell):
+    """remember() persiste trust_level/authority_source/provenance_ref cuando
+    se pasan como kwargs y los recupera vía get_cell().
+    """
+    cid = cell.remember(
+        "m-1", "matter_pattern",
+        {"sequence": "intake discovery trial"},
+        area="laboral", agent="intake-agent",
+        trust_level="VERIFIED",
+        authority_source="intake-agent",
+        provenance_ref="cite-abc-123",
+    )
+    cell_data = cell.get_cell(cid)
+    assert cell_data is not None
+    assert cell_data["trust_level"] == "VERIFIED"
+    assert cell_data["authority_source"] == "intake-agent"
+    assert cell_data["provenance_ref"] == "cite-abc-123"
+
+
+def test_remember_defaults_to_unverified(cell: MemoryCell):
+    """remember() sin trust_level explícito → UNVERIFIED (conservative)."""
+    cid = cell.remember(
+        "m-1", "matter_pattern",
+        {"seq": "intake"},
+        area="laboral", agent="intake-agent",
+    )
+    cell_data = cell.get_cell(cid)
+    assert cell_data is not None
+    assert cell_data["trust_level"] == "UNVERIFIED"
+    assert cell_data["authority_source"] == ""
+    assert cell_data["provenance_ref"] == ""
+
+
+def test_is_trustworthy_true_when_verified(cell: MemoryCell):
+    """is_trustworthy() True solo cuando trust_level == VERIFIED."""
+    cid_v = cell.remember(
+        "m-1", "matter_pattern", {"s": "x"},
+        area="laboral", agent="a",
+        trust_level="VERIFIED", authority_source="human",
+        provenance_ref="doc-1",
+    )
+    assert cell.is_trustworthy(cid_v) is True
+
+
+def test_is_trustworthy_false_when_unverified(cell: MemoryCell):
+    """is_trustworthy() False para UNVERIFIED/OBSERVATION/SPECULATIVE."""
+    cid_unv = cell.remember(
+        "m-1", "matter_pattern", {"s": "x"},
+        area="laboral", agent="a",
+        trust_level="UNVERIFIED",
+    )
+    cid_obs = cell.remember(
+        "m-2", "matter_pattern", {"s": "y"},
+        area="laboral", agent="a",
+        trust_level="OBSERVATION",
+    )
+    cid_spec = cell.remember(
+        "m-3", "matter_pattern", {"s": "z"},
+        area="laboral", agent="a",
+        trust_level="SPECULATIVE",
+    )
+    assert cell.is_trustworthy(cid_unv) is False
+    assert cell.is_trustworthy(cid_obs) is False
+    assert cell.is_trustworthy(cid_spec) is False
+
+
+def test_authority_source_stored(cell: MemoryCell):
+    """authority_source se almacena tal cual — matter_id, agent_name, o "human"."""
+    cid_matter = cell.remember(
+        "m-1", "matter_pattern", {"s": "x"},
+        area="laboral", agent="a",
+        authority_source="matter-42",
+    )
+    cid_agent = cell.remember(
+        "m-2", "matter_pattern", {"s": "x"},
+        area="laboral", agent="a",
+        authority_source="research-agent",
+    )
+    cid_human = cell.remember(
+        "m-3", "matter_pattern", {"s": "x"},
+        area="laboral", agent="a",
+        authority_source="human",
+    )
+    assert cell.get_cell(cid_matter)["authority_source"] == "matter-42"
+    assert cell.get_cell(cid_agent)["authority_source"] == "research-agent"
+    assert cell.get_cell(cid_human)["authority_source"] == "human"
+
+
+def test_is_trustworthy_false_for_nonexistent(cell: MemoryCell):
+    """is_trustworthy() False cuando el cell_id no existe (no crash)."""
+    assert cell.is_trustworthy("nonexistent-cell-xyz") is False
+
+
+def test_remember_invalid_trust_level_raises(cell: MemoryCell):
+    """remember() con trust_level inválido → ValueError."""
+    with pytest.raises(ValueError):
+        cell.remember(
+            "m-1", "matter_pattern", {"s": "x"},
+            area="laboral", agent="a",
+            trust_level="BogusLevel",
+        )
+
+
+def test_recall_returns_provenance_fields(cell: MemoryCell):
+    """recall() ahora retorna trust_level/authority_source/provenance_ref."""
+    cell.remember(
+        "m-1", "matter_pattern", {"sequence": "intake discovery trial"},
+        area="laboral", agent="intake-agent",
+        trust_level="VERIFIED", authority_source="intake-agent",
+        provenance_ref="doc-001",
+    )
+    hits = cell.recall("intake discovery", k=5)
+    assert len(hits) == 1
+    h = hits[0]
+    assert h["trust_level"] == "VERIFIED"
+    assert h["authority_source"] == "intake-agent"
+    assert h["provenance_ref"] == "doc-001"

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import pytest
 
 from albra.marketplace.paid_agent_matrix import (
+    BILLING_STATUS,
+    SETTLEMENT_STATUS,
     BillingCycle,
     PaidAgentMatrix,
     ServiceMatrix,
@@ -263,3 +265,118 @@ def test_billing_cycle_as_dict(matrix):
     assert d["tenant_id"] == "t1"
     assert d["status"] == "open"
     assert d["total_usd"] == 0.0
+
+
+# ===== Block N: billing vs settlement separation =====
+
+
+def test_billing_status_constants_disjoint():
+    """BILLING_STATUS y SETTLEMENT_STATUS son frozensets y disjuntos —
+    billing (pending/billed/overdue) y settlement (unsettled/settled/failed)
+    son dos concerns separados, no estados del mismo lifecycle.
+    """
+    assert isinstance(BILLING_STATUS, frozenset)
+    assert isinstance(SETTLEMENT_STATUS, frozenset)
+    assert BILLING_STATUS == frozenset({"pending", "billed", "overdue"})
+    assert SETTLEMENT_STATUS == frozenset({"unsettled", "settled", "failed"})
+    # The two sets are disjoint — no overlap between billing and settlement
+    # concepts. (Note: legacy `status` field uses open/invoiced/paid/overdue
+    # for backward compat, but the canonical billing status set is
+    # pending/billed/overdue per Block N spec.)
+    assert BILLING_STATUS.isdisjoint(SETTLEMENT_STATUS)
+
+
+def test_billing_status_separate_from_settlement(matrix):
+    """BillingCycle tiene `status` (billing) y `settlement_status` (settlement)
+    como campos independientes — cambiar uno no afecta el otro.
+    """
+    cycle = matrix.get_or_create_billing_cycle(tenant_id="t1")
+    # Fresh cycle: billing open, settlement unsettled.
+    assert cycle.status == "open"
+    assert cycle.settlement_status == "unsettled"
+    assert cycle.settlement_tx_hash == ""
+
+    # Close billing cycle (billing-side: status -> invoiced). Settlement
+    # should remain untouched.
+    closed = matrix.close_billing_cycle(cycle.id)
+    assert closed.status == "invoiced"
+    assert closed.settlement_status == "unsettled"
+    assert closed.settlement_tx_hash == ""
+
+
+def test_mark_settled_sets_tx_hash(matrix):
+    """mark_settled(tx_hash) actualiza settlement_status='settled' y guarda
+    el tx_hash — sin tocar el billing-side `status`.
+    """
+    cycle = matrix.get_or_create_billing_cycle(tenant_id="t1")
+    tx_hash = "0xabc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
+    settled = matrix.mark_settled(cycle.id, tx_hash)
+
+    assert settled.settlement_status == "settled"
+    assert settled.settlement_tx_hash == tx_hash
+    # Billing-side status remains "open" — settlement is independent.
+    assert settled.status == "open"
+    # Re-fetch to confirm persistence.
+    again = matrix.get_or_create_billing_cycle(tenant_id="t1")
+    assert again.settlement_status == "settled"
+    assert again.settlement_tx_hash == tx_hash
+
+
+def test_paid_does_not_imply_settled(matrix):
+    """mark_paid NO auto-marks settled — billing-side payment is a separate
+    concern from on-chain USDC settlement. After mark_paid, settlement_status
+    must remain "unsettled".
+    """
+    matrix.set_pricing(skill_id="x", price_per_call_usd=1.0, free_tier_calls_per_month=0)
+    matrix.record_usage(tenant_id="t1", skill_id="x")
+    cycle = matrix.get_or_create_billing_cycle(tenant_id="t1")
+    matrix.close_billing_cycle(cycle.id)
+
+    paid = matrix.mark_paid(cycle.id, invoice_url="https://pay.example/invoice/123")
+    # Billing-side status is paid...
+    assert paid.status == "paid"
+    assert paid.invoice_url == "https://pay.example/invoice/123"
+    # ...but settlement_status is STILL unsettled — mark_paid does NOT imply
+    # settled. Caller must explicitly call mark_settled(tx_hash).
+    assert paid.settlement_status == "unsettled"
+    assert paid.settlement_tx_hash == ""
+
+    # Now mark_settled — only then settlement_status changes.
+    tx_hash = "0xdeadbeef" + "0" * 56
+    settled = matrix.mark_settled(cycle.id, tx_hash)
+    assert settled.status == "paid"  # billing-side unchanged
+    assert settled.settlement_status == "settled"
+    assert settled.settlement_tx_hash == tx_hash
+
+
+def test_mark_settled_nonexistent_raises(matrix):
+    """mark_settled con cycle_id inexistente → KeyError."""
+    with pytest.raises(KeyError):
+        matrix.mark_settled("nonexistent-cycle-id", "0xnonexistent")
+
+
+def test_billing_cycle_as_dict_includes_settlement_fields(matrix):
+    """as_dict() incluye settlement_status y settlement_tx_hash."""
+    cycle = matrix.get_or_create_billing_cycle(tenant_id="t1")
+    d = cycle.as_dict()
+    assert "settlement_status" in d
+    assert "settlement_tx_hash" in d
+    assert d["settlement_status"] == "unsettled"
+    assert d["settlement_tx_hash"] == ""
+
+
+def test_settlement_persists_across_connections(tmp_path):
+    """settlement_status y tx_hash persisten al cerrar y reabrir la DB."""
+    db = tmp_path / "paid.db"
+    m1 = PaidAgentMatrix(str(db))
+    cycle = m1.get_or_create_billing_cycle(tenant_id="t1")
+    m1.mark_settled(cycle.id, "0xpersistent_tx_hash")
+    m1.close()
+
+    m2 = PaidAgentMatrix(str(db))
+    cycle2 = m2.get_or_create_billing_cycle(tenant_id="t1")
+    assert cycle2.id == cycle.id
+    assert cycle2.settlement_status == "settled"
+    assert cycle2.settlement_tx_hash == "0xpersistent_tx_hash"
+    m2.close()
