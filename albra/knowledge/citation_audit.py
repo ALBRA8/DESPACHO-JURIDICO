@@ -90,6 +90,10 @@ class Citation:
     quote: str | None = None  # si hay texto entre comillas asociado
     start: int = 0  # posición en el texto original
     end: int = 0
+    # V2.5-H3: vigency info ("VIGENTE" | "DEROGADO" | "MODIFICADA" | "")
+    # populated by CitationAuditor.audit_response for verified citations
+    # only; "" means "vigency not yet computed".
+    vigency_status: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +104,7 @@ class Citation:
             "quote": self.quote,
             "start": self.start,
             "end": self.end,
+            "vigency_status": self.vigency_status,
         }
 
 
@@ -196,6 +201,11 @@ class CitationAuditor:
                 # V1.3 provenance fields (None for V1.1/V1.2 documents).
                 "provenance_status": doc.get("provenance_status"),
                 "provenance": doc.get("provenance"),
+                # V2.5-H3 vigency fields (defaults safe for older corpus
+                # versions that may not declare them).
+                "status": doc.get("status", "vigente"),
+                "effective_from": doc.get("effective_from") or doc.get("date_issued") or "",
+                "effective_until": doc.get("effective_until"),
             }
         return index
 
@@ -374,6 +384,57 @@ class CitationAuditor:
 
     # ===== Paso 4: audit_response (orquestador) =====
 
+    def check_vigency(self, document_name: str) -> dict[str, Any]:
+        """Check whether a cited document is currently in effect.
+
+        Returns:
+            {
+                "status": "VIGENTE" | "DEROGADO" | "UNKNOWN",
+                "effective_date": str,        # ISO date or "" if unknown
+                "derogation_date": str | None, # ISO date or None
+            }
+
+        Rules (V2.5-H3):
+        - Constitución Política de 1991 -> VIGENTE (status="vigente").
+        - Ley 100 de 1993 / Ley 80 de 1993 -> VIGENTE (status="modificada"
+          still means "in force, with amendments").
+        - Documents with effective_until set -> DEROGADO.
+        - Documents not in corpus -> UNKNOWN.
+        """
+        doc = self._index.get(document_name)
+        if not doc:
+            return {
+                "status": "UNKNOWN",
+                "effective_date": "",
+                "derogation_date": None,
+            }
+        effective_until = doc.get("effective_until")
+        status_raw = (doc.get("status") or "").lower()
+        if effective_until:
+            return {
+                "status": "DEROGADO",
+                "effective_date": doc.get("effective_from") or "",
+                "derogation_date": effective_until,
+            }
+        if status_raw in ("vigente", "modificada"):
+            return {
+                "status": "VIGENTE",
+                "effective_date": doc.get("effective_from") or "",
+                "derogation_date": None,
+            }
+        if status_raw == "derogada":
+            return {
+                "status": "DEROGADO",
+                "effective_date": doc.get("effective_from") or "",
+                "derogation_date": effective_until,
+            }
+        # Unknown status field — be conservative (treat as UNKNOWN).
+        return {
+            "status": "UNKNOWN",
+            "effective_date": doc.get("effective_from") or "",
+            "derogation_date": effective_until,
+        }
+
     def audit_response(
         self,
         text: str,
@@ -450,6 +511,14 @@ class CitationAuditor:
             revealed=revealed, require_provenance=require_provenance,
             provenance_blocked=len(provenance_blocked),
         )
+        # V2.5-H3: populate vigency_status on each verified citation so
+        # the lawyer sees "VIGENTE / DEROGADO" alongside the citation.
+        # Only verified citations get vigency info — unverified/rejected
+        # documents are by definition not in the corpus, so we leave
+        # their vigency_status as "".
+        for c in verified:
+            if not c.vigency_status:
+                c.vigency_status = self.check_vigency(c.document_name)["status"]
         return CitationAuditResult(
             revealed=revealed,
             total_citations=total,
