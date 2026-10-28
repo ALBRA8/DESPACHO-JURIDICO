@@ -797,6 +797,459 @@ class McpServer:
         self.log.info("mcp.stdio.stop")
 
 
+# =========================================================================
+# V2.3-D: MCP HTTP transport + OAuth scaffold
+# =========================================================================
+# Reuses the 10 ALBRA tools registered in McpServer. Adds HTTP endpoints
+# so external clients (Claude Code, ChatGPT, Cursor) can consume ALBRA over
+# the network. OAuth is a V2.3-D scaffold (fake tokens); V2.6+ integrates
+# a real provider (Auth0, Keycloak, GitHub OAuth App).
+#
+# Pure stdlib: http.server.BaseHTTPRequestHandler + json. NO FastAPI/uvicorn.
+#
+# Endpoints:
+#   GET  /mcp/health                                  → health check
+#   POST /mcp/initialize                              → server info + capabilities
+#   POST /mcp/tools/list                              → list of 10 tools
+#   POST /mcp/tools/call                              → invoke tool by name
+#   GET  /mcp/.well-known/oauth-authorization-server  → OAuth metadata
+#   GET  /mcp/oauth/authorize[?redirect_uri&state]    → issue code (scaffold)
+#   POST /mcp/oauth/token                             → exchange code → token
+#
+# CORS headers on every response. Bearer token required on initialize /
+# tools/list / tools/call when oauth_required=True.
+
+import http.server
+import secrets as _secrets_mod
+import urllib.parse as _urlparse
+
+_OAUTH_SCOPE = "mcp:tools"
+_OAUTH_TOKEN_TTL_SECONDS = 3600
+
+
+class McpHttpServer:
+    """MCP HTTP server con OAuth scaffold (V2.3-D).
+
+    Pure stdlib (http.server + json). Reuses the 10 ALBRA tools from
+    McpServer. Adds 7 HTTP endpoints + CORS + Bearer token validation.
+
+    OAuth V2.3-D scaffold: returns fake tokens. V2.6+ integrates real
+    OAuth provider (Auth0, Keycloak, GitHub OAuth App).
+    """
+
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8765,
+        oauth_required: bool = True,
+        *,
+        mcp_server: McpServer | None = None,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.oauth_required = oauth_required
+        self.log = get_logger("albra.mcp.http")
+        # Reuse the McpServer with the 10 tools (injectable for tests)
+        self.mcp: McpServer = mcp_server if mcp_server is not None else McpServer()
+        # OAuth scaffold (V2.3-D): in-memory code/token store
+        self._oauth_codes: dict[str, dict[str, Any]] = {}
+        self._oauth_tokens: set[str] = set()
+
+    # ===== Public dispatch =====
+
+    # Route table: path → set of allowed HTTP methods (excl. OPTIONS preflight,
+    # which is always 204).
+    _ROUTES: dict[str, set[str]] = {
+        "/mcp/health": {"GET"},
+        "/mcp/.well-known/oauth-authorization-server": {"GET"},
+        "/mcp/oauth/authorize": {"GET"},
+        "/mcp/oauth/token": {"POST"},
+        "/mcp/initialize": {"POST"},
+        "/mcp/tools/list": {"POST"},
+        "/mcp/tools/call": {"POST"},
+    }
+    # Endpoints that require a valid bearer token when oauth_required=True.
+    _PROTECTED_PATHS: set[str] = {
+        "/mcp/initialize", "/mcp/tools/list", "/mcp/tools/call",
+    }
+
+    def _handle_http_request(
+        self,
+        method: str,
+        path: str,
+        body: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, bytes, dict[str, str]]:
+        """Dispatch una request HTTP y retorna (status, body_bytes, headers).
+
+        Args:
+            method: HTTP method (GET/POST/OPTIONS).
+            path: Full path with optional query string.
+            body: Raw request body bytes (POST only).
+            headers: Request headers dict (case-insensitive lookup for
+                Authorization).
+
+        Returns:
+            (status_code, body_bytes, response_headers_dict) — CORS headers
+            always present.
+        """
+        headers = headers or {}
+        parsed = _urlparse.urlparse(path)
+        clean_path = parsed.path
+        bearer = self._extract_bearer(headers)
+
+        # OPTIONS preflight → 204 with CORS headers, no body.
+        if method == "OPTIONS":
+            return self._build(204, b"", {})
+
+        # Unknown path → 404 (regardless of bearer).
+        if clean_path not in self._ROUTES:
+            return self._not_found(clean_path)
+
+        # Method not allowed on this path → 405 (regardless of bearer).
+        allowed = self._ROUTES[clean_path]
+        if method not in allowed:
+            return self._method_not_allowed(clean_path, method)
+
+        # Protected endpoints: bearer required when oauth_required=True.
+        if (
+            self.oauth_required
+            and clean_path in self._PROTECTED_PATHS
+            and not self._is_valid_bearer(bearer)
+        ):
+            return self._unauthorized(
+                "Bearer token required (V2.3-D accepts any non-empty token)"
+            )
+
+        # Parse JSON body for protected POST endpoints (initialize/tools/*).
+        # /mcp/oauth/token accepts both JSON and form-encoded, handled inside
+        # _handle_token itself.
+        payload: dict[str, Any] = {}
+        if method == "POST" and clean_path in self._PROTECTED_PATHS and body:
+            try:
+                parsed_body = json.loads(body)
+                if not isinstance(parsed_body, dict):
+                    return self._bad_request("Body must be a JSON object")
+                payload = parsed_body
+            except json.JSONDecodeError as e:
+                return self._bad_request(f"Invalid JSON: {e}")
+
+        try:
+            # Public GET endpoints.
+            if method == "GET" and clean_path == "/mcp/health":
+                return self._build(200, self._json(self._health_payload()), {})
+
+            if method == "GET" and clean_path == "/mcp/.well-known/oauth-authorization-server":
+                return self._build(200, self._json(self._oauth_metadata()), {})
+
+            if method == "GET" and clean_path == "/mcp/oauth/authorize":
+                return self._handle_authorize(parsed.query)
+
+            if method == "POST" and clean_path == "/mcp/oauth/token":
+                return self._handle_token(body)
+
+            # Protected POST endpoints.
+            if method == "POST" and clean_path == "/mcp/initialize":
+                return self._build(200, self._json(self._initialize_payload()), {})
+
+            if method == "POST" and clean_path == "/mcp/tools/list":
+                return self._build(200, self._json({"tools": self.mcp.list_tools()}), {})
+
+            if method == "POST" and clean_path == "/mcp/tools/call":
+                name = payload.get("name")
+                if not name:
+                    return self._bad_request("Missing 'name' in tools/call body")
+                args = payload.get("arguments", {}) or {}
+                if not isinstance(args, dict):
+                    return self._bad_request("'arguments' must be an object")
+                result = self.mcp.call_tool(name, args)
+                return self._build(
+                    200,
+                    self._json({
+                        "content": [{
+                            "type": "text",
+                            "text": json.dumps(result, default=str, ensure_ascii=False),
+                        }],
+                        "isError": "error" in result,
+                    }),
+                    {},
+                )
+
+            # Should be unreachable (route table guarantees method match), but
+            # keep a defensive fallback.
+            return self._method_not_allowed(clean_path, method)
+        except Exception as e:  # noqa: BLE001
+            self.log.error("mcp.http.dispatch.error", path=clean_path, error=str(e))
+            return self._internal_error(str(e))
+
+    # ===== Payload builders =====
+
+    def _health_payload(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "server": _SERVER_NAME,
+            "version": _SERVER_VERSION,
+            "tools_count": len(self.mcp.list_tools()),
+            "oauth_required": self.oauth_required,
+        }
+
+    def _initialize_payload(self) -> dict[str, Any]:
+        return {
+            "protocolVersion": _MCP_PROTOCOL_VERSION,
+            "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
+            "capabilities": {
+                "tools": {"listChanged": True},
+                "resources": {"listChanged": True},
+                "prompts": {"listChanged": True},
+            },
+            "transport": "http",
+            "oauth_required": self.oauth_required,
+        }
+
+    def _oauth_metadata(self) -> dict[str, Any]:
+        base = f"http://{self.host}:{self.port}"
+        return {
+            "issuer": base,
+            "authorization_endpoint": f"{base}/mcp/oauth/authorize",
+            "token_endpoint": f"{base}/mcp/oauth/token",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "code_challenge_methods_supported": ["plain", "S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "scopes_supported": [_OAUTH_SCOPE],
+            "note": "V2.3-D OAuth scaffold. V2.6+: integrate real provider.",
+        }
+
+    def _handle_authorize(self, query: str) -> tuple[int, bytes, dict[str, str]]:
+        """V2.3-D scaffold: issue a fake auth code and redirect.
+
+        If `redirect_uri` is in the query → 302 redirect with ?code=...
+        Otherwise → 200 with JSON body containing the code.
+        """
+        params = dict(_urlparse.parse_qsl(query))
+        redirect_uri = params.get("redirect_uri")
+        state = params.get("state", "")
+        code = "albra-code-" + _secrets_mod.token_hex(8)
+        self._oauth_codes[code] = {
+            "issued_at": datetime.now().isoformat(),
+            "used": False,
+            "state": state,
+            "redirect_uri": redirect_uri,
+        }
+        if redirect_uri:
+            # OAuth spec: 302 redirect with code in query
+            sep = "&" if "?" in redirect_uri else "?"
+            location = f"{redirect_uri}{sep}code={code}&state={state}"
+            return self._build(
+                302,
+                b"",
+                {"Location": location, "Cache-Control": "no-store"},
+            )
+        # No redirect_uri → return code inline (dev/test convenience)
+        return self._build(
+            200,
+            self._json({
+                "code": code,
+                "state": state,
+                "note": "V2.3-D OAuth scaffold: code returned inline. "
+                        "V2.6+: integrate real OAuth provider.",
+            }),
+            {"Cache-Control": "no-store"},
+        )
+
+    def _handle_token(self, body: bytes) -> tuple[int, bytes, dict[str, str]]:
+        """V2.3-D scaffold: exchange code for a fake bearer token."""
+        # Accept JSON or form-encoded body
+        parsed: Any = None
+        if body:
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                parsed = dict(_urlparse.parse_qsl(body.decode("utf-8", errors="replace")))
+        if not isinstance(parsed, dict):
+            parsed = {}
+        grant_type = parsed.get("grant_type")
+        code = parsed.get("code")
+        if grant_type != "authorization_code":
+            return self._bad_request("grant_type must be 'authorization_code'")
+        if not code or code not in self._oauth_codes:
+            return self._bad_request("Invalid or unknown 'code'")
+        if self._oauth_codes[code]["used"]:
+            return self._bad_request("Code already used")
+        self._oauth_codes[code]["used"] = True
+        token = "albra-token-" + _secrets_mod.token_hex(16)
+        self._oauth_tokens.add(token)
+        return self._build(
+            200,
+            self._json({
+                "access_token": token,
+                "token_type": "Bearer",
+                "expires_in": _OAUTH_TOKEN_TTL_SECONDS,
+                "scope": _OAUTH_SCOPE,
+                "note": "V2.3-D OAuth scaffold: fake token. "
+                        "V2.6+: exchange for real provider token.",
+            }),
+            {"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
+    # ===== Bearer token validation =====
+
+    @staticmethod
+    def _extract_bearer(headers: dict[str, str]) -> str | None:
+        """Case-insensitive Authorization header lookup."""
+        for k, v in headers.items():
+            if k.lower() == "authorization":
+                if v.startswith("Bearer "):
+                    return v[7:].strip()
+                return None
+        return None
+
+    def _is_valid_bearer(self, token: str | None) -> bool:
+        """V2.3-D: accept any non-empty token (or our scaffold-issued token).
+
+        V2.6+: validate against real OAuth provider (Auth0, Keycloak, GitHub).
+        """
+        if not token:
+            return False
+        # Scaffold-issued tokens are explicitly accepted
+        if token in self._oauth_tokens:
+            return True
+        # V2.3-D scaffold: accept any non-empty bearer
+        return True
+
+    # ===== Response builders =====
+
+    def _build(
+        self,
+        status: int,
+        body: bytes,
+        headers: dict[str, str],
+    ) -> tuple[int, bytes, dict[str, str]]:
+        """Compose final response with CORS headers + Content-Type."""
+        out_headers: dict[str, str] = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "86400",
+        }
+        if body:
+            out_headers["Content-Type"] = "application/json; charset=utf-8"
+        out_headers.update(headers)
+        return status, body, out_headers
+
+    def _json(self, payload: Any) -> bytes:
+        return json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+
+    def _bad_request(self, msg: str) -> tuple[int, bytes, dict[str, str]]:
+        return self._build(400, self._json({"error": "bad_request", "message": msg}), {})
+
+    def _unauthorized(self, msg: str) -> tuple[int, bytes, dict[str, str]]:
+        return self._build(
+            401,
+            self._json({"error": "unauthorized", "message": msg}),
+            {"WWW-Authenticate": 'Bearer realm="ALBRA-MCP"'},
+        )
+
+    def _method_not_allowed(self, path: str, method: str) -> tuple[int, bytes, dict[str, str]]:
+        body = self._json({
+            "error": "method_not_allowed",
+            "message": f"Method {method} not allowed on {path}",
+        })
+        return self._build(
+            405,
+            body,
+            {"Allow": self._allow_for_path(path)},
+        )
+
+    def _not_found(self, path: str) -> tuple[int, bytes, dict[str, str]]:
+        return self._build(
+            404,
+            self._json({"error": "not_found", "message": f"Path not found: {path}"}),
+            {},
+        )
+
+    def _internal_error(self, msg: str) -> tuple[int, bytes, dict[str, str]]:
+        return self._build(
+            500,
+            self._json({"error": "internal_error", "message": msg}),
+            {},
+        )
+
+    @staticmethod
+    def _allow_for_path(path: str) -> str:
+        if path in ("/mcp/health", "/mcp/.well-known/oauth-authorization-server", "/mcp/oauth/authorize"):
+            return "GET, OPTIONS"
+        if path == "/mcp/oauth/token":
+            return "POST, OPTIONS"
+        if path in ("/mcp/initialize", "/mcp/tools/list", "/mcp/tools/call"):
+            return "POST, OPTIONS"
+        return "GET, POST, OPTIONS"
+
+    # ===== Start the HTTP server =====
+
+    def start(self) -> None:
+        """Start the HTTP server (blocking). Pure stdlib http.server."""
+        srv = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            server_version = "ALBRA-MCP-HTTP/2.3"
+
+            def _read_body(self) -> bytes:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                if length <= 0:
+                    return b""
+                return self.rfile.read(length)
+
+            def _headers_dict(self) -> dict[str, str]:
+                return {k: v for k, v in self.headers.items()}
+
+            def _write_response(self, status: int, body: bytes, headers: dict[str, str]) -> None:
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+
+            def do_OPTIONS(self) -> None:  # noqa: N802
+                status, body, headers = srv._handle_http_request(
+                    "OPTIONS", self.path, b"", self._headers_dict()
+                )
+                self._write_response(status, body, headers)
+
+            def do_GET(self) -> None:  # noqa: N802
+                status, body, headers = srv._handle_http_request(
+                    "GET", self.path, b"", self._headers_dict()
+                )
+                self._write_response(status, body, headers)
+
+            def do_POST(self) -> None:  # noqa: N802
+                status, body, headers = srv._handle_http_request(
+                    "POST", self.path, self._read_body(), self._headers_dict()
+                )
+                self._write_response(status, body, headers)
+
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                srv.log.info("mcp.http.request", line=format % args)
+
+        httpd = http.server.ThreadingHTTPServer((self.host, self.port), _Handler)
+        httpd.daemon_threads = True
+        self.log.info(
+            "mcp.http.start",
+            host=self.host,
+            port=self.port,
+            oauth=self.oauth_required,
+            tools=len(self.mcp.list_tools()),
+        )
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            self.log.info("mcp.http.stop")
+        finally:
+            httpd.server_close()
+
+
 # Singleton server
 _server: McpServer | None = None
 
@@ -835,5 +1288,51 @@ def main() -> None:
     server.run_stdio()
 
 
+def main_http() -> None:
+    """CLI entrypoint: `python -m albra.mcp.server [--http|--no-auth|--port|--host]`.
+
+    Defaults to stdio mode (legacy). With `--http` starts the HTTP transport
+    + OAuth scaffold (V2.3-D). With `--no-auth` disables bearer validation
+    (dev only — do NOT use in production).
+    """
+    import argparse
+
+    from albra.observability.logger import setup_logging
+    setup_logging()
+    parser = argparse.ArgumentParser(
+        prog="albra.mcp.server",
+        description="ALBRA MCP server (stdio by default, HTTP with --http)",
+    )
+    parser.add_argument(
+        "--http", action="store_true",
+        help="Start HTTP server (default: stdio JSON-RPC 2.0)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8765,
+        help="HTTP listen port (default: 8765)",
+    )
+    parser.add_argument(
+        "--host", default="0.0.0.0",
+        help="HTTP listen host (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--no-auth", action="store_true",
+        help="Disable OAuth bearer check (DEV ONLY — never use in prod)",
+    )
+    args = parser.parse_args()
+    if args.http:
+        # HTTP mode: stdout is NOT the JSON-RPC channel, so logging stays normal.
+        server = McpHttpServer(
+            host=args.host,
+            port=args.port,
+            oauth_required=not args.no_auth,
+        )
+        server.start()
+    else:
+        # stdio mode: stdout is the JSON-RPC channel, redirect logs to stderr.
+        _redirect_logging_to_stderr()
+        get_mcp_server().run_stdio()
+
+
 if __name__ == "__main__":
-    main()
+    main_http()
