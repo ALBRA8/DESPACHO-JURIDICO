@@ -155,6 +155,114 @@ class IngestionCoordinator:
                 return True
         return False
 
+    # ===== V2.3-E: Playwright fetch para JS-driven sites =====
+
+    def fetch_with_playwright(
+        self,
+        url: str,
+        *,
+        wait_for: str = "networkidle",
+        timeout_ms: int = 30000,
+        selector_to_wait: str | None = None,
+    ) -> tuple[int, str, str]:
+        """Fetch URL con Playwright headless Chromium.
+        Renderiza JS antes de devolver el HTML final.
+
+        Args:
+            url: URL a fetchear
+            wait_for: 'networkidle' | 'load' | 'domcontentloaded'
+            timeout_ms: timeout en milisegundos
+            selector_to_wait: si se setea, espera a que aparezca este selector
+                              antes de devolver el HTML (para SPAs)
+
+        Returns: (status_code, html_text, error_msg)
+        - status_code: 200 si OK, 0 si playwright falla, original si HTTP error
+        - html_text: HTML renderizado después de JS
+        - error_msg: vacío si OK, mensaje si falla
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            return 0, "", f"playwright not installed: {e}. Install with: pip install playwright && playwright install chromium"
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                context = browser.new_context(
+                    user_agent="ALBRA-V2.3-E/1.0 (legal-research; Playwright)",
+                    viewport={"width": 1280, "height": 720},
+                )
+                page = context.new_page()
+                response = page.goto(url, wait_until=wait_for, timeout=timeout_ms)
+                if selector_to_wait:
+                    page.wait_for_selector(selector_to_wait, timeout=timeout_ms)
+                # Small extra wait for late-loaded content
+                page.wait_for_timeout(1500)
+                html = page.content()
+                status = response.status if response else 0
+                browser.close()
+                return status, html, ""
+        except Exception as e:
+            return 0, "", f"playwright fetch exception: {e}"
+
+    def attempt_with_playwright(
+        self,
+        source_name: str,
+        url: str | None = None,
+        selector_to_wait: str | None = None,
+    ) -> IngestionResult:
+        """V2.3-E: Intenta fetch con Playwright (headless Chromium).
+
+        Útil para sites JS-driven que el método estático no puede procesar.
+        Si Playwright no está instalado, devuelve error claro.
+        """
+        source = OFFICIAL_SOURCES.get(source_name)
+        if not source and not url:
+            return IngestionResult(
+                source_name=source_name,
+                url="",
+                error=f"Unknown source: {source_name!r}",
+            )
+        target_url = url or source["url"]
+        result = IngestionResult(source_name=source_name, url=target_url)
+
+        status, html, error = self.fetch_with_playwright(
+            target_url, selector_to_wait=selector_to_wait
+        )
+        result.http_status = status
+        result.raw_html_size = len(html) if html else 0
+
+        if error:
+            result.error = f"Playwright error: {error}"
+            self.log.warning(
+                "ingestion.playwright_failed", source=source_name, error=error
+            )
+            return result
+
+        if status != 200 or not html:
+            result.error = f"HTTP {status} or empty response after Playwright"
+            return result
+
+        # Check JS-driven again — even after Playwright, could be empty
+        if not html.strip() or len(html) < 500:
+            result.js_driven = True
+            result.error = "Playwright render returned minimal HTML (site may be blocking headless)"
+            return result
+
+        # Extract articles (this is the magic — Playwright rendered JS so we should have content)
+        articles = self.extract_articles(
+            html,
+            document_type=source.get("document_type", "ley") if source else "ley",
+        )
+        result.articles_extracted = articles
+        result.js_driven = False  # Playwright rendered, no longer JS-driven issue
+        self.log.info(
+            "ingestion.playwright_success",
+            source=source_name, url=target_url,
+            articles_count=len(articles), html_size=len(html),
+        )
+        return result
+
     # ===== Extracción de artículos =====
 
     def extract_articles(self, html: str, document_type: str = "ley") -> list[dict[str, str]]:
@@ -263,9 +371,14 @@ class IngestionCoordinator:
 
     def stats(self) -> dict[str, Any]:
         """Stats del coordinator."""
+        try:
+            import playwright.sync_api as _  # noqa: F401
+            playwright_available = True
+        except ImportError:
+            playwright_available = False
         return {
             "supported_sources_count": len(OFFICIAL_SOURCES),
             "supported_sources": list(OFFICIAL_SOURCES.keys()),
-            "playwright_available": False,  # V2.3-E
-            "v2_3_d_status": "static HTML only. JS-driven sites require V2.3-E.",
+            "playwright_available": playwright_available,
+            "v2_3_d_status": "static HTML only. JS-driven sites use attempt_with_playwright() (V2.3-E).",
         }

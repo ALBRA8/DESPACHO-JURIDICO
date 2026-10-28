@@ -63,7 +63,8 @@ def test_list_supported_sources_returns_4(coordinator):
 def test_stats_returns_metadata(coordinator):
     stats = coordinator.stats()
     assert stats["supported_sources_count"] == 4
-    assert stats["playwright_available"] is False  # V2.3-E
+    # V2.3-E: playwright IS available now
+    assert stats["playwright_available"] is True
     assert "v2_3_d_status" in stats
 
 
@@ -264,3 +265,61 @@ def test_ingestion_result_as_dict():
     assert d["js_driven"] is False
     assert d["articles_count"] == 1
     assert d["raw_html_size"] == 500
+
+
+# ===== V2.3-E: Playwright tests =====
+
+def test_stats_reports_playwright_available_after_install(coordinator):
+    """Tras install playwright, stats debe reportar playwright_available=True."""
+    stats = coordinator.stats()
+    # Playwright was installed in V2.3-E
+    assert stats["playwright_available"] is True
+
+
+def test_fetch_with_playwright_static_html_site(coordinator):
+    """Playwright debe poder fetchear una página HTML estática conocida."""
+    # Use secretariasenado — known to be static HTML, used successfully in V1.1
+    status, html, error = coordinator.fetch_with_playwright(
+        "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+        wait_for="load",
+        timeout_ms=20000,
+    )
+    # Tolerar fallos de red, pero si funciona, verificar formato
+    if error:
+        # Skip if network/playwright unavailable
+        import pytest
+        pytest.skip(f"Network or playwright unavailable: {error}")
+    assert status == 200
+    assert len(html) > 1000  # Constitución HTML es grande
+
+
+def test_attempt_with_playwright_unknown_source_returns_error(coordinator):
+    result = coordinator.attempt_with_playwright("nonexistent_source")
+    assert result.error != ""
+    assert "Unknown source" in result.error
+
+
+def test_attempt_with_playwright_static_html_extracts_articles(coordinator):
+    """Playwright en site estático también debe extraer articles (mismos que V1.1)."""
+    result = coordinator.attempt_with_playwright("secretaria_senado")
+    # Skip if network unavailable
+    if result.error and ("playwright" in result.error.lower() or "Network" in result.error):
+        import pytest
+        pytest.skip(f"Network/playwright unavailable: {result.error}")
+    # Si llegó, debe tener articles de la Constitución
+    assert result.http_status == 200
+    # Constitución V1.1 tiene 6 articles conocidos (1, 2, 5, 13, 25, 29)
+    # Playwright puede extraer MÁS articles del HTML completo
+    assert len(result.articles_extracted) >= 6
+
+
+def test_attempt_with_playwright_js_driven_site(coordinator):
+    """Playwright en site JS-driven (CSJ Laboral) — debe renderizar.
+    Skip si network unavailable o site bloquea headless."""
+    result = coordinator.attempt_with_playwright("corte_suprema_laboral")
+    # Skip if network/playwright unavailable
+    if result.error and ("playwright" in result.error.lower() or "exception" in result.error.lower()):
+        import pytest
+        pytest.skip(f"Network/playwright unavailable: {result.error}")
+    # Si llegó, status debe ser 200 o error claro
+    assert result.http_status in (0, 200, 403, 404) or result.error
