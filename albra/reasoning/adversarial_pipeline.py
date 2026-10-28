@@ -46,12 +46,14 @@ permanece estable.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from albra.knowledge.citation_audit import CitationAuditor
 from albra.knowledge.rag_local import LocalRAG, default_rag
+from albra.llm.router import LLMRouter
 from albra.observability.logger import get_logger
 
 
@@ -171,13 +173,19 @@ class AdversarialPipeline:
     RECOMMEND_RETRADE = "RETRADE"
     RECOMMEND_ABANDON = "ABANDON"
 
-    def __init__(self, llm_provider: Any = None) -> None:
+    def __init__(self, llm_router: LLMRouter | None = None) -> None:
         """
-        llm_provider: optional. Si None, usa heurísticas rule-based (V2.2 default).
-        Para V2.3+, inyectar provider real (anthropic/openai/mock) para
-        generar argumentos reales con LLM.
+        llm_router: opcional (V2.3+). Si None, usa heurísticas rule-based
+        (V2.2 default). Si se inyecta, RED/BLUE/MAGISTRADO usan LLM para
+        generar argumentos; si LLM falla o JSON parse falla, fallback
+        a rule-based (V2.2).
+
+        Uso:
+            pipeline = AdversarialPipeline()  # rule-based
+            pipeline = AdversarialPipeline(llm_router=get_default_router())
+            pipeline = AdversarialPipeline(llm_router=LLMRouter("anthropic"))
         """
-        self.llm_provider = llm_provider
+        self._llm_router = llm_router
         self.log = get_logger("albra.reasoning.adversarial_pipeline")
         # Corpus V1.1 lookup helpers
         self._auditor = CitationAuditor()
@@ -239,6 +247,12 @@ class AdversarialPipeline:
     ) -> list[RedArgument]:
         """Genera 3-5 contra-argumentos estructurados.
 
+        V2.3+ (con LLM router inyectado):
+        - Construye prompt estructurado (draft + matter_context) pidiendo
+          JSON [{target_clause, argument, evidence, severity}].
+        - Si LLM responde y JSON parsea → RedArgument objects desde el JSON.
+        - Si LLM falla o JSON no parsea → fallback a rule-based (V2.2).
+
         V2.2 (rule-based, no LLM):
         - Split draft por párrafos (split por '\\n\\n')
         - Por cada párrafo sustantivo (>= 50 chars), generar 1 RED argument
@@ -251,6 +265,13 @@ class AdversarialPipeline:
           'low' si solo falta contexto.
         - Evidence: lista vacía o referencias genéricas a corpus.
         """
+        # V2.3+ LLM path: si router inyectado, intentar generar vía LLM
+        if self._llm_router is not None:
+            llm_args = self._red_phase_llm(draft_markdown, matter_context)
+            if llm_args is not None:
+                return llm_args
+            self.log.info("adversarial_pipeline.red_fallback_to_rules")
+
         paragraphs = self._split_paragraphs(draft_markdown)
         args: list[RedArgument] = []
         # matter_context accepted for V2.3+ LLM use; rule-based ignores it
@@ -319,6 +340,81 @@ class AdversarialPipeline:
             )
         return args
 
+    def _red_phase_llm(
+        self,
+        draft_markdown: str,
+        matter_context: dict | None,
+    ) -> list[RedArgument] | None:
+        """LLM path para RED phase. Devuelve lista o None (fallback).
+
+        Construye prompt estructurado, llama al router, parsea JSON list.
+        Si la lista parsea y no está vacía, crea RedArgument objects.
+        Si LLM lanza excepción o JSON no parsea, devuelve None
+        (caller cae a rule-based V2.2).
+        """
+        try:
+            prompt = self._build_red_prompt(draft_markdown, matter_context)
+            response = self._llm_router.generate(prompt)  # type: ignore[union-attr]
+            items = self._parse_json_list(response.text)
+            args: list[RedArgument] = []
+            for item in items[: self.MAX_RED_ARGUMENTS]:
+                if not isinstance(item, dict):
+                    continue
+                tc = int(item.get("target_clause", 0) or 0)
+                arg_text = str(item.get("argument", "")).strip()
+                if not arg_text:
+                    continue
+                ev_raw = item.get("evidence", [])
+                if isinstance(ev_raw, str):
+                    ev_raw = [ev_raw]
+                elif not isinstance(ev_raw, list):
+                    ev_raw = []
+                sev = str(item.get("severity", "medium")).lower()
+                if sev not in ("low", "medium", "high"):
+                    sev = "medium"
+                args.append(
+                    RedArgument(
+                        id=str(uuid.uuid4()),
+                        target_clause_index=tc,
+                        argument=arg_text,
+                        role="red",
+                        evidence=[str(e) for e in ev_raw],
+                        severity=sev,
+                    )
+                )
+            if not args:
+                return None
+            return args
+        except Exception as e:  # noqa: BLE001 — fallback control
+            self.log.warning(
+                "adversarial_pipeline.red_llm_failed",
+                error=str(e)[:120],
+            )
+            return None
+
+    def _build_red_prompt(
+        self,
+        draft_markdown: str,
+        matter_context: dict | None,
+    ) -> str:
+        """Construye prompt para RED phase (3 contra-argumentos en JSON)."""
+        ctx_str = (
+            json.dumps(matter_context, ensure_ascii=False, default=str)
+            if matter_context
+            else "{}"
+        )
+        return (
+            "Genera 3 contra-argumentos estructurados para el siguiente draft "
+            "jurídico. Cada contra-argumento debe identificar: target_clause "
+            "(índice del párrafo), argument (texto), evidence (lista de normas), "
+            "severity (low/medium/high).\n\n"
+            f"Draft: {draft_markdown}\n"
+            f"Matter context: {ctx_str}\n\n"
+            "Formato JSON: "
+            '[{"target_clause": int, "argument": str, "evidence": [str], '
+            '"severity": str}]'
+        )
+
     # ===== Phase 2: BLUE =====
 
     def _blue_phase(
@@ -328,6 +424,12 @@ class AdversarialPipeline:
     ) -> list[BlueResponse]:
         """Por cada RED, genera BLUE defense.
 
+        V2.3+ (con LLM router inyectado):
+        - Por cada RED argument, prompt pidiendo JSON
+          {argument, evidence, confidence}.
+        - Si LLM responde y JSON parsea → BlueResponse desde el JSON.
+        - Si LLM falla o JSON no parsea → fallback a rule-based (V2.2).
+
         V2.2 (rule-based):
         - Si RED dice 'no cita norma': BLUE responde 'La norma aplicable es
           Constitución art. X' (lookup al corpus V1.1)
@@ -335,6 +437,13 @@ class AdversarialPipeline:
           considera en párrafo Y' o 'Pendiente fortalecer'
         - confidence: 0.8 si BLUE puede citar norma del corpus, 0.4 si no.
         """
+        # V2.3+ LLM path
+        if self._llm_router is not None:
+            llm_resps = self._blue_phase_llm(draft_markdown, red_arguments)
+            if llm_resps is not None:
+                return llm_resps
+            self.log.info("adversarial_pipeline.blue_fallback_to_rules")
+
         paragraphs = self._split_paragraphs(draft_markdown)
         responses: list[BlueResponse] = []
 
@@ -385,6 +494,69 @@ class AdversarialPipeline:
             )
         return responses
 
+    def _blue_phase_llm(
+        self,
+        draft_markdown: str,
+        red_arguments: list[RedArgument],
+    ) -> list[BlueResponse] | None:
+        """LLM path para BLUE phase. Devuelve lista o None (fallback)."""
+        try:
+            responses: list[BlueResponse] = []
+            for red in red_arguments:
+                prompt = self._build_blue_prompt(draft_markdown, red)
+                response = self._llm_router.generate(prompt)  # type: ignore[union-attr]
+                parsed = self._parse_json_object(response.text)
+                arg_text = str(parsed.get("argument", "")).strip()
+                if not arg_text:
+                    arg_text = "Defensa generada por LLM."
+                ev_raw = parsed.get("evidence", [])
+                if isinstance(ev_raw, str):
+                    ev_raw = [ev_raw]
+                elif not isinstance(ev_raw, list):
+                    ev_raw = []
+                try:
+                    confidence = float(parsed.get("confidence", 0.5))
+                except (TypeError, ValueError):
+                    confidence = 0.5
+                # Clamp 0..1
+                confidence = max(0.0, min(1.0, confidence))
+                responses.append(
+                    BlueResponse(
+                        id=str(uuid.uuid4()),
+                        responds_to=red.id,
+                        argument=arg_text,
+                        role="blue",
+                        evidence=[str(e) for e in ev_raw],
+                        confidence=confidence,
+                    )
+                )
+            if not responses:
+                return None
+            return responses
+        except Exception as e:  # noqa: BLE001 — fallback control
+            self.log.warning(
+                "adversarial_pipeline.blue_llm_failed",
+                error=str(e)[:120],
+            )
+            return None
+
+    def _build_blue_prompt(
+        self,
+        draft_markdown: str,
+        red: RedArgument,
+    ) -> str:
+        """Construye prompt para BLUE phase (defensa estructurada en JSON)."""
+        return (
+            "Genera una defensa estructurada (BLUE phase) para el siguiente "
+            "contra-argumento RED. Identifica: argument (texto), evidence "
+            "(lista de normas), confidence (0.0-1.0).\n\n"
+            f"Draft: {draft_markdown}\n"
+            f"RED argument (id={red.id}, target_clause={red.target_clause_index}): "
+            f"{red.argument}\n\n"
+            "Formato JSON: "
+            '{"argument": str, "evidence": [str], "confidence": float}'
+        )
+
     def _lookup_norm(
         self, paragraph: str
     ) -> tuple[str, list[str], float]:
@@ -428,11 +600,23 @@ class AdversarialPipeline:
     ) -> list[MagistradoRuling]:
         """Por cada par RED+BLUE, emite ruling.
 
+        V2.3+ (con LLM router inyectado):
+        - Por cada par RED+BLUE, prompt pidiendo JSON {ruling, reason}.
+        - Si LLM responde y JSON parsea → MagistradoRuling desde el JSON.
+        - Si LLM falla o JSON no parsea → fallback a rule-based (V2.2).
+
         V2.2 (rule-based):
         - SUSTAINED si BLUE confidence >= 0.7 y tiene evidence del corpus.
         - OVERRULED si BLUE confidence < 0.4 o sin evidence.
         - SPLIT en caso intermedio.
         """
+        # V2.3+ LLM path
+        if self._llm_router is not None:
+            llm_rulings = self._magistrado_phase_llm(red_arguments, blue_responses)
+            if llm_rulings is not None:
+                return llm_rulings
+            self.log.info("adversarial_pipeline.magistrado_fallback_to_rules")
+
         rulings: list[MagistradoRuling] = []
         blue_by_red = {b.responds_to: b for b in blue_responses}
 
@@ -478,6 +662,73 @@ class AdversarialPipeline:
                 )
             )
         return rulings
+
+    def _magistrado_phase_llm(
+        self,
+        red_arguments: list[RedArgument],
+        blue_responses: list[BlueResponse],
+    ) -> list[MagistradoRuling] | None:
+        """LLM path para MAGISTRADO phase. Devuelve lista o None (fallback)."""
+        try:
+            blue_by_red = {b.responds_to: b for b in blue_responses}
+            rulings: list[MagistradoRuling] = []
+            for red in red_arguments:
+                blue = blue_by_red.get(red.id)
+                if blue is None:
+                    # Sin BLUE → OVERRULED determinista (sin LLM necesario)
+                    rulings.append(
+                        MagistradoRuling(
+                            red_argument_id=red.id,
+                            blue_response_id="",
+                            ruling="OVERRULED",
+                            reason=(
+                                "BLUE no presentó defensa — "
+                                "RED argument se mantiene."
+                            ),
+                        )
+                    )
+                    continue
+                prompt = self._build_magistrado_prompt(red, blue)
+                response = self._llm_router.generate(prompt)  # type: ignore[union-attr]
+                parsed = self._parse_json_object(response.text)
+                ruling = str(parsed.get("ruling", "SPLIT")).upper()
+                if ruling not in ("SUSTAINED", "OVERRULED", "SPLIT"):
+                    ruling = "SPLIT"
+                reason = str(parsed.get("reason", ""))
+                rulings.append(
+                    MagistradoRuling(
+                        red_argument_id=red.id,
+                        blue_response_id=blue.id,
+                        ruling=ruling,
+                        reason=reason,
+                    )
+                )
+            if not rulings:
+                return None
+            return rulings
+        except Exception as e:  # noqa: BLE001 — fallback control
+            self.log.warning(
+                "adversarial_pipeline.magistrado_llm_failed",
+                error=str(e)[:120],
+            )
+            return None
+
+    def _build_magistrado_prompt(
+        self,
+        red: RedArgument,
+        blue: BlueResponse,
+    ) -> str:
+        """Construye prompt para MAGISTRADO phase (ruling en JSON)."""
+        return (
+            "Como magistrado, emite un ruling sobre el siguiente par RED+BLUE.\n"
+            "ruling: SUSTAINED | OVERRULED | SPLIT\n"
+            "reason: justificación breve.\n\n"
+            f"RED argument (id={red.id}): {red.argument}\n"
+            f"BLUE response (id={blue.id}, confidence={blue.confidence}): "
+            f"{blue.argument}\n"
+            f"BLUE evidence: {blue.evidence}\n\n"
+            'Formato JSON: {"ruling": str, "reason": str}'
+        )
 
     # ===== Recommendation =====
 
@@ -527,3 +778,47 @@ class AdversarialPipeline:
             f"{n_substantive} sustantivos (>= {self.MIN_PARAGRAPH_LENGTH} chars), "
             f"{total_chars} caracteres totales."
         )
+
+    def _parse_json_list(self, text: str) -> list:
+        """Extrae una lista JSON del texto del LLM.
+
+        El LLM puede envolver el JSON en markdown fences (```json ... ```)
+        o prose. Busca el primer '[' y el último ']' y parsea ese substring.
+
+        Lanza json.JSONDecodeError o ValueError si no parsea.
+        """
+        if not text:
+            raise json.JSONDecodeError("empty text", "", 0)
+        stripped = text.strip()
+        start = stripped.find("[")
+        end = stripped.rfind("]")
+        if start == -1 or end == -1 or end <= start:
+            raise json.JSONDecodeError(
+                "no JSON list brackets found", stripped, 0
+            )
+        json_str = stripped[start : end + 1]
+        data = json.loads(json_str)
+        if not isinstance(data, list):
+            raise ValueError("LLM response is not a JSON list")
+        return data
+
+    def _parse_json_object(self, text: str) -> dict:
+        """Extrae un objeto JSON del texto del LLM.
+
+        Busca el primer '{' y el último '}' y parsea ese substring.
+        Lanza json.JSONDecodeError o ValueError si no parsea.
+        """
+        if not text:
+            raise json.JSONDecodeError("empty text", "", 0)
+        stripped = text.strip()
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise json.JSONDecodeError(
+                "no JSON object braces found", stripped, 0
+            )
+        json_str = stripped[start : end + 1]
+        data = json.loads(json_str)
+        if not isinstance(data, dict):
+            raise ValueError("LLM response is not a JSON object")
+        return data
