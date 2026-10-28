@@ -1,61 +1,106 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `PARTIAL`
-- **Última revisión documental:** 2026-10-25
+- **Estado del documento:** `UPDATED V2.5`
+- **Última revisión documental:** 2026-10-28
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
 - **Rama observada:** `main`
-- **HEAD observado antes de crear esta carpeta:** `1bcf8290d06531cedb94d0638f4b0542991dcaea`
-- **Estado de pruebas del HEAD:** `UNVERIFIED` en esta revisión documental
+- **HEAD observado:** `81a9c83` (V2.3-H Corpus V1.2 + CitationAuditor configurable) — pendiente de push
+- **HEAD remoto (GitHub):** `3191013` (V2.5-C+D — último push exitoso con PAT anterior)
+- **Commits locales sin push:** 5 (V2.3-B+ MCP HTTP, V2.3-E Playwright, V2.3-F LLM, V2.3-G LLM integration, V2.3-H Corpus V1.2)
+- **Estado de pruebas del HEAD local:** 1072 passed, 7 skipped (localmente verificado; NO verificado en CI remoto hasta push)
+- **Estado de CI remoto:** `NOT VERIFIED` — el workflow YAML tenía bugs (branches `ain` sin `m`, docstring Python en YAML). Corregido localmente, pendiente de push.
 
 ## 1. Propósito del proyecto
 
-Construir un organismo digital especializado en el trabajo jurídico, con jurisdicción inicial en Colombia, separando la arquitectura del agente, las capacidades y el conocimiento jurídico verificable.
+Construir un agente jurídico colombiano digital con jurisdicción inicial en Colombia, separando arquitectura del agente, capacidades y conocimiento jurídico verificable.
 
-La separación crítica es:
-- **ADN/runtime:** comportamiento, identidad, seguridad, razonamiento, herramientas, memoria, evidencia y trazabilidad.
-- **Conocimiento jurídico:** normas, jurisprudencia, doctrina y metadatos que deben proceder de fuentes identificables y verificables.
-- **Arnés/adaptadores:** mecanismos para conectar o sustituir el agente y registrar conocimiento/capacidades sin mezclarlo con la identidad del agente.
+## 2. Estado técnico observado (V2.5)
 
-## 2. Estado técnico observado
+El HEAD local `81a9c83` contiene 12 módulos nuevos sobre el ARNÉS migration (`1bcf829`):
 
-El último commit consultado, `1bcf829` (HEAD completo indicado arriba), se titula `feat: MIGRACIÓN PROYECTO → ARNÉS — AGENTE-GENERAL montable`. Su descripción declara la creación de:
-- `src/adapters/`: interfaz AgentAdapter y GeneralAdapter.
-- `src/bridges/`: BridgeRegistry, ZaiSdkBridge y PythonBridge.
-- `src/harness/`: SkillRegistry y KnowledgeRegistry.
-- `src/bootstrap/`: inicialización y API del arnés.
-- Siete módulos de conocimiento declarados: `legal-schemas`, `legal-sources`, `legal-temporal`, `corpus-pilot`, `firewall-policies`, `legal-sops` y `specialists`.
+### V2.0 — Despacho Jurídico Base (commit `d88a63e`, pushed)
+- Matters (state machine monótono 8 estados, SQLite WAL, JSONL timeline)
+- Agent organigrama (5 agentes en markdown + YAML frontmatter)
+- Citation audit (fail-closed anti-hallucination)
+- Approval chain (`minimum_human_signoff`)
+- Matter audit (JSONL hash chain SHA-256)
 
-El mensaje del commit declara 30 pruebas del arnés y 242/242 pruebas totales aprobadas, además de lint correcto. **Estos resultados se conservan como declaraciones del commit; no se volvieron a ejecutar ni se verificó CI durante la creación de este contexto.**
+### V2.1 — Hardening Jurídico (commit `cc1e180`, pushed)
+- DeadlineGuard (12 tipos de términos procesales colombianos)
+- ContradictionGuard (regex accent-insensitive)
+- AgenticCitator (8 treatment labels)
+
+### V2.2 — Document Processing (commits `ac64ad4`→`9bc6b76`, pushed)
+- Redline DOCX (tracked changes nativas w:ins/w:del)
+- RAG local TF-IDF (pure Python, no ML deps)
+- Adversarial RED→BLUE pipeline
+- 5 playbooks (laboral/civil/constitucional/familia/corporativo)
+
+### V2.3 — Infrastructure (commits `daee63c`→`81a9c83`, **5 commits pendientes de push**)
+- Eval Suite (rubrics + Legal Phantom Citation test, 100% TPR/TNR local)
+- MCP server (10 tools, stdio + HTTP transport + OAuth scaffold)
+- Citation graph (SQLite con 8 treatment labels)
+- IngestionCoordinator (Playwright para JS-driven sites)
+- Corpus V1.2 (125 articles reales via Playwright)
+- LLM providers scaffold (Mock/Anthropic/OpenAI/Ollama + router)
+- LLMRouter integration en AdversarialPipeline
+
+### V2.4 — Enhancement (commits `6c0c707`→`0301520`, pushed)
+- Scheduled agents (event-driven triggers)
+- Memory Cell (cross-matter recall, NewMind pattern)
+- Precedent Board (tentative→confirmed, Lavern pattern)
+- Tabular review (N×M clause comparison)
+
+### V2.5 — Commercial (commits `324320b`→`3191013`, pushed)
+- Skills marketplace (15 skills pre-registradas)
+- White-label platform (multi-tenant)
+- X402 paid-agent matrix (USDC settlement local)
+- Install log (hash chain para skill installations)
 
 ## 3. Estado del conocimiento jurídico
 
-La documentación existente registra una auditoría de corpus V1.0 con fallos graves por contenido sintético o mal identificado. El informe V1.1 posterior declara que se sustituyeron o eliminaron esos elementos y que se conservaron tres documentos normativos con doce artículos. Ver [Estado del corpus jurídico](./ESTADO_CORPUS_JURIDICO.md).
+### Corpus V1.1 (pushed, 12 articles)
+- Constitución 1991: 6 articles (1, 2, 5, 13, 25, 29) — fetched de secretariasenado.gov.co
+- Ley 100 de 1993: 3 articles (1, 2, 3) — fetched de secretariasenado.gov.co
+- Ley 80 de 1993: 3 articles (1, 2, 24) — fetched de secretariasenado.gov.co
+- **Verificación**: content_hash SHA-256 declarado, NO re-verificado contra fuente oficial en este momento.
 
-**No declarar el corpus completo ni la jurisprudencia disponible.** El propio informe V1.1 declara que no se incorporó jurisprudencia real, que no se conservó doctrina y que el corpus es pequeño. Su resultado PASS es el resultado reportado en ese documento; la revisión actual no reproduce independientemente las pruebas ni compara el contenido almacenado con las fuentes oficiales.
+### Corpus V1.2 (LOCAL_ONLY, 125 articles, commit `81a9c83`, pendiente de push)
+- Constitución 1991: 32 articles (1-32) — fetched con Playwright V2.3-E
+- Ley 100 de 1993: 45 articles — fetched con Playwright
+- Ley 80 de 1993: 48 articles — fetched con Playwright
+- **Verificación**: Playwright fetched exitosamente en runtime local. HTML size: 80,612 bytes (Constitución). Articles extraídos con regex `ARTICULO N.` + cleanup prefix `o.` (estilo legal colombiano `ARTICULO 1o.`).
+- **Provenance chain**: source → Playwright fetch → regex extract → cleanup → article → content_hash → real_corpus_v12.py → CitationAuditor(corpus_version='v12')
+- **Limitación**: NO verificado en CI remoto. `raw_content` es texto reconstruido (no el HTML crudo), pero content_hash es SHA-256 del texto reconstruido (no del HTML original). Esto es una limitación conocida: el hash garantiza integridad del texto almacenado, NO del HTML fuente.
 
-## 4. Documentación fuente ya existente
+## 4. Documentación fuente
 
-Los informes técnicos históricos siguen en `docs/` en la raíz del repositorio. Esta carpeta los indexa; no los reemplaza ni los mueve:
-- `docs/ARCHITECTURE.md`
-- `docs/AUDIT_FINAL_PRECORPUS.md`
-- `docs/AUDIT_INDEPENDENT_V1.md`
-- `docs/AUDIT_INDEPENDENT_V2.md`
-- `docs/CORPUS_PILOT_AUDIT_V1.md`
-- `docs/CORPUS_PILOT_AUDIT_V1_1.md`
-- `docs/FINAL_REPORT.md`
-- `docs/IMPROVEMENTS.md`
-- `docs/PARITY_REPORT.md`
-- `docs/V1.6_INTEGRATION_COMPLETE.md`
+- `docs/ARCHITECTURE.md` — arquitectura V1.0
+- `docs/CONSTRUCCION_V2.md` — arquitectura V2.0
+- `docs/LEGAL_V2.md` — registro legal + checklist sala limpia
+- `docs/CORPUS_PILOT_AUDIT_V1.md` — auditoría corpus V1.0 (FAIL)
+- `docs/CORPUS_PILOT_AUDIT_V1_1.md` — auditoría corpus V1.1 (PASS)
+- `docs/AUDIT_INDEPENDENT_V1.md` — auditoría V1.0
+- `docs/AUDIT_INDEPENDENT_V2.md` — auditoría V1.6
+- `docs/V1.6_INTEGRATION_COMPLETE.md` — reporte V1.6
+- `docs/FINAL_REPORT.md` — reporte final V1.0
+- `docs/PARITY_REPORT.md` — paridad holding V1.5
+- `docs/IMPROVEMENTS.md` — mejoras exponenciales
+- `CONTEXTO JURIDICO/ESTADO_CORPUS_JURIDICO.md` — estado del corpus
 
-## 5. Bloqueos y cautelas de continuidad
+## 5. Bloqueos y cautelas
 
-1. No confundir el resultado declarado en un informe con verificación independiente actual.
-2. No reintroducir documentos sintéticos para completar categorías vacías.
-3. No afirmar que una URL accesible o bien formada autentica por sí sola la fuente o el contenido.
-4. No asumir que las afirmaciones de los informes antiguos describen necesariamente el HEAD actual.
-5. Antes de declarar una fase cerrada, inspeccionar el código vigente, reproducir las pruebas pertinentes y conservar evidencia con commit, comandos, resultados y limitaciones.
-6. La transferencia del ADN al futuro agente contador es una intención futura, no una tarea técnica aprobada ni iniciada.
+1. **Push pendiente**: 5 commits locales (V2.3-B+ through V2.3-H) sin push. Token GitHub (`(PAT redacted — ver GitHub settings)`) expirado/inválido (401). Requiere PAT nuevo.
+2. **CI YAML corregido localmente**: branches `[main, develop]` (antes `ain`), docstring Python eliminado. Pendiente de push + verificación en GitHub Actions.
+3. **Corpus V1.2 provenance**: chain documentada pero NO re-verificada contra fuente oficial en CI. El `raw_content` es texto reconstruido (limitación conocia, declarada arriba).
+4. **LLM providers**: scaffold listo pero sin API key real. AnthropicProvider/OpenAIProvider retornan NotImplementedError V2.6. OllamaProvider hace HTTP real si Ollama está corriendo.
+5. **MCP HTTP OAuth**: scaffold (accepts any non-empty bearer token). V2.6+: Auth0/Keycloak/GitHub OAuth App real.
 
-## 6. Próximo paso recomendado
+## 6. Próximos pasos (bloqueados por accounts externos)
 
-Realizar una reconciliación del HEAD actual contra los informes existentes: revisar el arnés y los siete módulos declarados, comprobar CI/pruebas del commit, verificar los archivos reales del corpus y registrar por separado resultados reproducidos, limitaciones y trabajo pendiente.
+- Push 5 commits (requiere PAT nuevo)
+- CI verification en GitHub Actions (requiere push)
+- Deployment Vercel + Railway (requiere accounts)
+- AWS Bogotá data residency (requiere AWS account)
+- Real OAuth provider (requiere OAuth provider account)
+- LLM real con Anthropic/OpenAI (requiere API key)

@@ -1,227 +1,163 @@
 # DESPACHO JURÍDICO DIGITAL ALBRA
 
-> **Agente Base V1.0** — El organismo completo, sin conocimiento jurídico cargado todavía.
+> **V2.5** — Agente jurídico colombiano con 12 módulos: Matters, Citation Audit, MCP server, White-label, X402 USDC billing, y más.
 
-[![Tests](https://github.com/ALBRA8/DESPACHO-JURIDICO/actions/workflows/ci.yml/badge.svg)](./.github/workflows/ci.yml)
+[![CI](https://github.com/ALBRA8/DESPACHO-JURIDICO/actions/workflows/ci.yml/badge.svg)](https://github.com/ALBRA8/DESPACHO-JURIDICO/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-Proprietary%20ALBRA-red)
+![Version](https://img.shields.io/badge/version-2.5.1-green)
+![Tests](https://img.shields.io/badge/tests-1072%20passed-brightgreen)
 
 ---
 
-## 1. Qué es ALBRA
+## Qué es ALBRA V2.5
 
-ALBRA es un **organismo digital** diseñado para ser el núcleo inteligente de un despacho jurídico. Esta primera versión **NO** incluye:
+ALBRA es un **agente jurídico colombiano** construido sobre metodología **ClonaKit clean-room**, inspirado en 27 referentes Legal OS (MikeOSS, GLAW, Lavern, Lawgent, Claude-Code-Law-Firm, Prism, QWED, CourtListener MCP, Moonlit, Claude for Legal, Harvey LAB, Awesome Legal Benchmarks, legal-rag-eval, CoCoBench, LawPortal, case.dev, Gotham, LawVu, NewMind, Agent Skills for Legal, y más).
 
-- ❌ Conocimiento jurídico cargado (normas, jurisprudencia, doctrina)
-- ❌ Subagentes especializados (constitucional, civil, penal, etc.)
-- ❌ Integraciones activas con APIs externas
+### Stack
+- **Backend**: Python 3.10+ · SQLite WAL · JSONL append-only · Markdown + YAML frontmatter · pytest
+- **Frontend**: Next.js 16 · TypeScript 5 · Tailwind CSS 4 · shadcn/ui · Prisma 6
+- **Corpus**: V1.2 (125 articles reales fetched con Playwright desde secretariasenado.gov.co)
+- **Tests**: 1072 passed, 7 skipped
+- **Lint**: ruff All checks passed
 
-Pero **SÍ** incluye toda la **arquitectura** para que esa carga se haga progresivamente:
+## 12 Módulos V2.0-V2.5
 
-- ✅ 30 órganos del ADN ALBRA operativos
-- ✅ Memoria vectorial con 6 categorías separadas
-- ✅ MCP/MSP server + client
-- ✅ Doctor (sistema de diagnóstico)
-- ✅ Trazabilidad de evidencia y provenance
-- ✅ HITL para acciones sensibles
-- ✅ Adapters de canales (WhatsApp, Telegram, texto, voz)
-- ✅ Workflow engine con estados
-- ✅ Handoff protocol para futuros subagentes
-- ✅ Providers desacoplados (Mock, OpenAI, Anthropic)
-- ✅ Suite de tests
+### V2.0 — Despacho Jurídico Base
+| Módulo | Descripción |
+|---|---|
+| **Matters** | State machine monótono (8 estados, SQLite WAL, JSONL timeline) |
+| **Agent Organigrama** | 5 agentes en markdown + YAML frontmatter (filing/intake/research/drafting/review) |
+| **Citation Audit** | Pipeline extract→validate→retrace→reveal_or_block con fail-closed anti-hallucination |
+| **Approval Chain** | Suggest→Prepare→Approve→Execute→Record con `minimum_human_signoff` |
+| **Matter Audit** | JSONL hash chain SHA-256 tamper-evident por matter |
 
-## 2. Principios rectores
+### V2.1 — Hardening Jurídico
+| Módulo | Descripción |
+|---|---|
+| **DeadlineGuard** | 12 tipos de términos procesales colombianos (prescripción 20y/10y, tutela, demanda 15d, recursos 5d) |
+| **ContradictionGuard** | Detecta contradicciones en cláusulas (regex accent-insensitive) |
+| **AgenticCitator** | 8 treatment labels (followed/distinguished/doubted/overruled/per_incuriam/affirmed/reversed/cited) |
 
-1. **GitHub es la ÚNICA FUENTE DE VERDAD del código.**
-2. El **Constructor** es el único autorizado a modificar código.
-3. El conocimiento jurídico **NO** es código. Se carga después.
-4. **NO se inventan** APIs, credenciales, ni integraciones.
-5. Toda acción sensible requiere **aprobación humana** (HITL).
-6. Trazabilidad obligatoria: `SOURCE → EVIDENCE → CONCLUSION → ACTION`.
-7. Separación estricta: `DATOS, FUENTES, EVIDENCIA, INFERENCIAS, CONCLUSIONES, ACCIONES`.
+### V2.2 — Document Processing
+| Módulo | Descripción |
+|---|---|
+| **Redline DOCX** | Tracked changes nativas (w:ins/w:del XML) + compare_docx_blackline |
+| **RAG Local** | TF-IDF + cosine similarity (pure Python, no ML deps) |
+| **Adversarial Pipeline** | RED→BLUE con MAGISTRADO ruling antes de file |
+| **Playbooks** | 5 áreas (laboral/civil/constitucional/familia/corporativo) en markdown |
 
-## 3. Arquitectura
+### V2.3 — Infrastructure + Corpus
+| Módulo | Descripción |
+|---|---|
+| **Eval Suite** | Rubrics (essential/forbidden/bonus) + Legal Phantom Citation test (100% TPR/TNR) |
+| **MCP Server** | 10 tools expuestas via stdio JSON-RPC 2.0 + HTTP transport con OAuth scaffold |
+| **Citation Graph** | SQLite graph DB con 8 treatment labels |
+| **IngestionCoordinator** | Fetch de fuentes colombianas oficiales + Playwright para JS-driven sites |
+| **Corpus V1.2** | 125 articles reales (Constitución 32 + Ley 100 45 + Ley 80 48) via Playwright |
+| **LLM Providers** | Scaffold modular: Mock (default), Anthropic, OpenAI, Ollama + LLMRouter con fallback |
+
+### V2.4 — Enhancement
+| Módulo | Descripción |
+|---|---|
+| **Scheduled Agents** | Event-driven triggers (matter_created, state_change, deadline_near, approval_pending) |
+| **Memory Cell** | Cross-matter recall con TF-IDF (NewMind pattern) |
+| **Precedent Board** | Promoción tentative→confirmed (Lavern pattern, 5 estados) |
+| **Tabular Review** | Comparación N-documentos × M-cláusulas (9 tipos de cláusula) |
+
+### V2.5 — Commercial
+| Módulo | Descripción |
+|---|---|
+| **Skills Marketplace** | 15 skills pre-registradas (5 agents + 5 playbooks + 5 advanced tools) |
+| **White-label** | Multi-tenant con branding + feature flags + license per tenant |
+| **X402 Paid-Agent** | Service matrix + usage records + billing cycles (USDC settlement local) |
+| **Install Log** | JSONL hash chain para skill installations (6 event types, 4 sources, 3 verdicts) |
+
+## Corpus V1.2 — 125 articles reales
+
+| Documento | Articles V1.1 | Articles V1.2 | Fuente |
+|---|---|---|---|
+| Constitución 1991 | 6 (arts 1,2,5,13,25,29) | **32** (arts 1-32) | secretariasenado.gov.co |
+| Ley 100 de 1993 | 3 (arts 1,2,3) | **45** | secretariasenado.gov.co |
+| Ley 80 de 1993 | 3 (arts 1,2,24) | **48** | secretariasenado.gov.co |
+| **TOTAL** | **12** | **125 (10x)** | Playwright V2.3-E |
+
+### Cadena de provenance
+
+```
+fuente oficial → Playwright fetch (HTML renderizado) → regex ARTICULO N.
+    → cleanup (strip HTML tags + prefix 'o.') → article {number, text}
+    → content_hash SHA-256 → real_corpus_v12.py → CitationAuditor(corpus_version='v12')
+    → CitationGraph.add_node() → LocalRAG.index_document()
+```
+
+## CI
+
+```yaml
+jobs:
+  lint:        # ruff check albra/ tests/
+  test:        # pytest -v --tb=short en Python 3.10, 3.11, 3.12
+  clean-room:  # git clone + checkout github.sha + pip install + lint + tests + CLI smoke
+```
+
+CI corre sobre el commit exacto (`github.sha`), no sobre `main` ambiguamente.
+
+## Quick start
+
+```bash
+# Install
+pip install -e ".[dev]"
+
+# Set ephemeral secrets (fail-closed without these)
+export ALBRA_JWT_SECRET="your-secret-here-32chars-min"
+export ALBRA_ADMIN_PASSWORD="your-password-here-8chars-min"
+
+# Run tests
+pytest -v --tb=short
+
+# Lint
+ruff check albra/ tests/
+
+# CLI
+albra info
+albra matter new --client "Juan Pérez" --area civil --parties "Pérez,Roa"
+albra agent list
+albra research "El artículo 1 de la Constitución Política de 1991..."
+albra matter audit <matter-id>
+
+# MCP server (stdio)
+python -m albra.mcp.server
+
+# MCP server (HTTP + OAuth scaffold)
+python -m albra.mcp.server --http --port 8765 --no-auth
+```
+
+## Estructura del repositorio
 
 ```
 albra/
-├── identity/          # Identidad + agente orquestador
-├── runtime/           # Loop runtime + contexto
-├── reasoning/         # Motor de razonamiento con capas
-├── tools/             # Framework de herramientas
-├── capabilities/      # Capability system
-├── mcp/               # MCP Server + Client
-├── memory/            # memorydv (vectorial, 6 categorías)
-├── doctor/            # Diagnóstico de salud
-├── multimodal/        # Texto, voz, audio, imagen, documento
-├── files/             # I/O con trazabilidad
-├── comms/             # Router + adapters (WA/TG/text/voice)
-├── research/          # Investigación con fuentes oficiales
-├── evidence/          # Cadena de evidencia + provenance
-├── security/          # Auth, authz, HITL
-├── events/            # Event bus
-├── workflows/         # Workflow engine
-├── handoffs/          # Handoff protocol (futuros subagentes)
-├── providers/         # LLM providers desacoplados
-├── resilience/        # Retry, fallback, recovery
-├── observability/     # Logger, metrics, tracer
-├── audit/             # Audit log inmutable
-├── knowledge/         # Capa de conocimiento (vacía - se carga después)
-│   └── colombia/      # Fuentes oficiales CO declaradas, contenido vacío
-├── api/               # FastAPI HTTP (opcional)
-└── cli.py             # CLI con click
+├── matters/           V2.0: state machine + store + timeline
+├── agents/             V2.0: 5 agentes markdown + YAML
+├── knowledge/          V2.0: citation_audit + corpus V1.1/V1.2 + rag_local + citation_graph + ingestion_colombia
+├── security/           V2.0: approval_chain + V2.1: deterministic_guard
+├── audit/              V2.0: matter_audit + V2.5: install_log
+├── documents/          V2.2: redline DOCX
+├── reasoning/          V2.2: adversarial_pipeline + V2.4: precedent_board
+├── review/             V2.4: tabular review
+├── marketplace/        V2.5: skills + paid_agent_matrix
+├── whitelabel/         V2.5: tenant manager
+├── scheduling/         V2.4: scheduler
+├── llm/                V2.3: providers (Mock/Anthropic/OpenAI/Ollama) + router
+├── mcp/                V2.3: stdio + HTTP server (10 tools)
+├── eval/               V2.3: rubrics + phantom citations
+├── playbooks/          V2.2: 5 playbooks por área
+└── ...                  V1.0-V1.6: 30 órganos del ADN ALBRA
+
+tests/                   1072 tests covering all modules
+.github/workflows/       CI: lint + test (3.10/3.11/3.12) + clean-room
+CONTEXTO JURIDICO/       Estado actual + corpus + auditorías
+docs/                    Arquitectura + auditorías V1-V2
 ```
 
-## 4. Instalación
+## Licencia
 
-```bash
-git clone https://github.com/ALBRA8/DESPACHO-JURIDICO.git
-cd DESPACHO-JURIDICO
-pip install -e .
-
-# Opcional - server HTTP
-pip install -e ".[server]"
-
-# Opcional - vector DB
-pip install -e ".[vector]"
-
-# Opcional - dev
-pip install -e ".[dev]"
-```
-
-## 5. Uso
-
-### CLI
-
-```bash
-# Info del agente
-albra info
-
-# Diagnóstico completo
-albra doctor
-
-# Órganos activos
-albra organs
-
-# Capacidades
-albra capabilities
-
-# Herramientas
-albra tools
-
-# Memoria stats
-albra memory
-
-# Modo chat por terminal
-albra chat
-
-# Servidor HTTP
-albra serve
-```
-
-### API HTTP (opcional)
-
-```bash
-albra serve
-# → http://localhost:8000
-# → /docs (Swagger)
-```
-
-Endpoints:
-- `GET /` — Identidad
-- `GET /health` — Diagnóstico
-- `POST /chat` — Chat
-- `GET /tools` — Tools
-- `GET /capabilities` — Capacidades
-- `GET /organs` — Órganos
-- `GET /memory/stats` — Memoria
-- `GET /audit` — Audit log
-- `GET /evidence` — Evidencia
-
-### Programáticamente
-
-```python
-import asyncio
-from albra.identity.agent import get_agent
-
-async def main():
-    agent = get_agent()
-    await agent.boot()
-    result = await agent.process("hola", user="test", channel="text")
-    print(result["reply"])
-    await agent.shutdown()
-
-asyncio.run(main())
-```
-
-## 6. Configuración
-
-Copia `.env.example` a `.env` y completa los valores reales.
-
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `ALBRA_ENVIRONMENT` | `development` | `development` o `production` |
-| `ALBRA_MEMORY_BACKEND` | `inmemory` | `inmemory` o `sqlite` |
-| `ALBRA_MEMORY_PATH` | `./data/memory.db` | Path a DB de memoria |
-| `ALBRA_DEFAULT_PROVIDER` | `mock` | `mock`, `openai`, `anthropic` |
-| `ALBRA_OPENAI_API_KEY` | `` | API key OpenAI |
-| `ALBRA_WHATSAPP_ENABLED` | `false` | Activar adapter WhatsApp |
-| `ALBRA_TELEGRAM_ENABLED` | `false` | Activar adapter Telegram |
-| `ALBRA_JWT_SECRET` | `change-me` | Secreto JWT |
-| `ALBRA_KNOWLEDGE_JURISDICTION` | `CO` | Colombia |
-
-## 7. Tests
-
-```bash
-pytest
-```
-
-## 8. Criterios de "Nacido" (verificados)
-
-1. ✅ Identidad propia
-2. ✅ Runtime funcional
-3. ✅ Razonamiento con capas separadas
-4. ✅ Tools
-5. ✅ MCP/MSP
-6. ✅ Doctor
-7. ✅ memorydv
-8. ✅ Texto
-9. ✅ Preparado para voz/audio
-10. ✅ Preparado para imágenes
-11. ✅ Lectura de documentos
-12. ✅ Generación de archivos
-13. ✅ Arquitectura de comunicación
-14. ✅ Preparado para WhatsApp
-15. ✅ Preparado para Telegram
-16. ✅ Investigación
-17. ✅ Evidencia
-18. ✅ Provenance
-19. ✅ Trazabilidad
-20. ✅ Seguridad
-21. ✅ Permisos
-22. ✅ Human-in-the-loop
-23. ✅ Observabilidad
-24. ✅ Auditoría
-25. ✅ Resiliencia
-26. ✅ Recuperación
-27. ✅ Providers desacoplados
-28. ✅ Workflows
-29. ✅ Handoffs
-30. ✅ Capability system
-31. ✅ Testing
-32. ✅ Preparado para conocimiento jurídico
-33. ✅ No requiere subagentes especializados
-34. ✅ No confunde conocimiento con código
-35. ✅ No modifica la fuente de verdad fuera del Constructor
-36. ✅ Puede evolucionar sin reconstruirse
-
-## 9. Próximas fases
-
-- **Fase 2**: Carga de conocimiento jurídico Colombia (Constitución, Códigos, Jurisprudencia)
-- **Fase 3**: Subagentes especializados (civil, penal, laboral, etc.)
-- **Fase 4**: Integración real con WhatsApp Business / Telegram Bot
-- **Fase 5**: Multimodalidad real (VLM, ASR/TTS)
-- **Fase 6**: Despliegue productivo
-
-## 10. Licencia
-
-Propietaria - ALBRA. Ver LICENSE.
+Proprietary — ALBRA. Inspiración clean-room de 27 referentes Legal OS. Sin código copiado.
