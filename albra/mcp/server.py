@@ -20,15 +20,16 @@ from albra.config.settings import Settings
 from albra.evidence.legal_gate import LegalGate
 from albra.mcp.protocol import MCPCapability, MCPRequest, MCPResponse
 from albra.mcp.security import (
+    AuthContext,
     McpAuditEntry,
     check_tool_permission,
     create_dev_context,
+    validate_bearer_token,
 )
 from albra.observability.logger import get_logger
 from albra.security.autonomy import AutonomyController
 from albra.security.execution_guard import ExecutionGuard
 from albra.security.policy_state import PolicyState
-from albra.security.rbac import has_permission as rbac_has_permission
 
 
 def _utcnow_iso() -> str:
@@ -775,12 +776,14 @@ class McpServer:
         )
 
         # 2. ExecutionGuard check (fail-closed TOTAL)
+        # Use auth_context.has_permission (V2.6 ROLE_PERMISSIONS) as rbac_check_fn,
+        # NOT the V1.6 rbac.py has_permission (which has different role names).
         guard_verdict = self._execution_guard.check(
             action="tool_invocation",
             user_role=auth_context.role,
             policy_state=self._policy_state,
             autonomy_controller=self._autonomy_controller,
-            rbac_check_fn=rbac_has_permission,
+            rbac_check_fn=lambda _role, perm: auth_context.has_permission(perm),
             legal_gate_verdict=legal_verdict,
             dedup_key=f"mcp:{name}:{auth_context.identity}",
         )
@@ -1027,13 +1030,19 @@ class McpHttpServer:
         oauth_required: bool = True,
         *,
         mcp_server: McpServer | None = None,
+        auth_mode: str = "dev",
     ) -> None:
         self.host = host
         self.port = port
         self.oauth_required = oauth_required
+        self._auth_mode = auth_mode  # "dev" | "test" | "production"
         self.log = get_logger("albra.mcp.http")
         # Reuse the McpServer with the 10 tools (injectable for tests)
-        self.mcp: McpServer = mcp_server if mcp_server is not None else McpServer()
+        # Pass security_mode so call_tool uses the same auth mode
+        if mcp_server is not None:
+            self.mcp: McpServer = mcp_server
+        else:
+            self.mcp = McpServer(security_mode=auth_mode)
         # OAuth scaffold (V2.3-D): in-memory code/token store
         self._oauth_codes: dict[str, dict[str, Any]] = {}
         self._oauth_tokens: set[str] = set()
@@ -1095,14 +1104,15 @@ class McpHttpServer:
             return self._method_not_allowed(clean_path, method)
 
         # Protected endpoints: bearer required when oauth_required=True.
-        if (
-            self.oauth_required
-            and clean_path in self._PROTECTED_PATHS
-            and not self._is_valid_bearer(bearer)
-        ):
-            return self._unauthorized(
-                "Bearer token required (V2.3-D accepts any non-empty token)"
-            )
+        # V3.0: validate_bearer_token resolves AuthContext from token.
+        # In production mode: ALL tokens return None (requires real OAuth).
+        auth_ctx: AuthContext | None = None
+        if self.oauth_required and clean_path in self._PROTECTED_PATHS:
+            auth_ctx = self._resolve_auth_context(bearer)
+            if auth_ctx is None:
+                return self._unauthorized(
+                    f"Bearer token required and must be valid (auth_mode={self._auth_mode})"
+                )
 
         # Parse JSON body for protected POST endpoints (initialize/tools/*).
         # /mcp/oauth/token accepts both JSON and form-encoded, handled inside
@@ -1145,7 +1155,9 @@ class McpHttpServer:
                 args = payload.get("arguments", {}) or {}
                 if not isinstance(args, dict):
                     return self._bad_request("'arguments' must be an object")
-                result = self.mcp.call_tool(name, args)
+                # V3.0: auth_ctx already resolved from bearer token above.
+                # Pass it to call_tool — identity is authenticated, NOT inferred.
+                result = self.mcp.call_tool(name, args, auth_context=auth_ctx)
                 return self._build(
                     200,
                     self._json({
@@ -1288,17 +1300,28 @@ class McpHttpServer:
         return None
 
     def _is_valid_bearer(self, token: str | None) -> bool:
-        """V2.3-D: accept any non-empty token (or our scaffold-issued token).
+        """Validate bearer token using security.validate_bearer_token."""
+        return self._resolve_auth_context(token) is not None
 
-        V2.6+: validate against real OAuth provider (Auth0, Keycloak, GitHub).
+    def _resolve_auth_context(self, token: str | None) -> AuthContext | None:
+        """Resolve a bearer token into an AuthContext.
+
+        In production mode: returns None for ALL tokens (requires real OAuth).
+        In test mode: accepts role-prefixed test tokens (test-abogado-xxx, etc.).
+        In dev mode: accepts any non-empty token (returns dev admin context).
+        Scaffold-issued OAuth tokens are accepted in dev/test modes.
         """
         if not token:
-            return False
-        # Scaffold-issued tokens are explicitly accepted
-        if token in self._oauth_tokens:
-            return True
-        # V2.3-D scaffold: accept any non-empty bearer
-        return True
+            return None
+        # Scaffold-issued tokens: look up the role from OAuth flow
+        if token in self._oauth_tokens and self._auth_mode != "production":
+            # Scaffold tokens get admin context in dev, test in test
+            from albra.mcp.security import create_dev_context, create_test_context
+            if self._auth_mode == "test":
+                return create_test_context(role="admin")
+            return create_dev_context(role="admin")
+        # Use validate_bearer_token from security.py
+        return validate_bearer_token(token, mode=self._auth_mode)
 
     # ===== Response builders =====
 
