@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from albra.config.settings import Settings
+from albra.evidence.legal_gate import LegalGate
 from albra.mcp.protocol import MCPCapability, MCPRequest, MCPResponse
 from albra.mcp.security import (
     McpAuditEntry,
@@ -24,6 +25,10 @@ from albra.mcp.security import (
     create_dev_context,
 )
 from albra.observability.logger import get_logger
+from albra.security.autonomy import AutonomyController
+from albra.security.execution_guard import ExecutionGuard
+from albra.security.policy_state import PolicyState
+from albra.security.rbac import has_permission as rbac_has_permission
 
 
 def _utcnow_iso() -> str:
@@ -300,11 +305,20 @@ class McpServer:
         playbook_loader: Any = None,
         security_mode: str = "dev",
         mcp_audit: Any = None,
+        execution_guard: Any = None,
+        policy_state: Any = None,
+        autonomy_controller: Any = None,
+        legal_gate: Any = None,
     ) -> None:
         self.log = get_logger("albra.mcp.server.public")
         # Security layer (V2.6 HARDENING)
         self._security_mode = security_mode  # "dev" | "test" | "production"
         self._mcp_audit = mcp_audit  # McpAuditLog or None
+        # V1.6 security components (wired V2.6 HARDENING)
+        self._execution_guard = execution_guard or ExecutionGuard()
+        self._policy_state = policy_state or PolicyState()
+        self._autonomy_controller = autonomy_controller or AutonomyController()
+        self._legal_gate = legal_gate or LegalGate()
         # Dependencias inyectables (lazy init si None)
         self._matter_store: Any = matter_store
         self._matter_audit: Any = matter_audit
@@ -747,6 +761,72 @@ class McpServer:
                 "status": "DENIED",
                 "authorization": "DENIED",
                 "reason": reason,
+            }
+
+        # ===== ExecutionGuard + LegalGate (V2.6 HARDENING) =====
+        # Chain: RBAC ALLOW → LegalGate evaluate → ExecutionGuard check → Execute
+        # This ensures RBAC ALLOW does NOT automatically mean execution allowed.
+
+        # 1. LegalGate evaluation
+        legal_verdict = self._legal_gate.evaluate(
+            action="tool_invocation",
+            text=str(args),
+            actor_role=auth_context.role,
+        )
+
+        # 2. ExecutionGuard check (fail-closed TOTAL)
+        guard_verdict = self._execution_guard.check(
+            action="tool_invocation",
+            user_role=auth_context.role,
+            policy_state=self._policy_state,
+            autonomy_controller=self._autonomy_controller,
+            rbac_check_fn=rbac_has_permission,
+            legal_gate_verdict=legal_verdict,
+            dedup_key=f"mcp:{name}:{auth_context.identity}",
+        )
+
+        if not guard_verdict.allowed:
+            guard_reason = guard_verdict.reason
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="DENIED",
+                denial_reason=f"GUARD DENY: {guard_reason}",
+                input_hash=_hash_dict(args), output_hash="", matter_id="",
+                correlation_id=auth_context.request_id,
+                result_status="denied", error=guard_reason,
+                latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
+            return {
+                "error": f"GUARD DENY: {guard_reason}",
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": guard_reason,
+                "guard_checks": [c.name + ":" + str(c.ok) for c in guard_verdict.checks],
+            }
+
+        # 3. LegalGate BLOCKED check (separate from guard)
+        if legal_verdict.verdict == "BLOCKED":
+            lg_reason = f"LEGAL GATE BLOCKED: {legal_verdict.reason}"
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="DENIED",
+                denial_reason=lg_reason,
+                input_hash=_hash_dict(args), output_hash="", matter_id="",
+                correlation_id=auth_context.request_id,
+                result_status="denied", error=lg_reason,
+                latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
+            return {
+                "error": lg_reason,
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": legal_verdict.reason,
             }
 
         # Execute tool handler
