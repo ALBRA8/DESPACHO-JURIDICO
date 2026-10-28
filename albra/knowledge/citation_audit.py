@@ -128,17 +128,34 @@ class CitationAuditResult:
 
 
 class CitationAuditor:
-    """Pipeline fail-closed de citation audit pre-reveal."""
+    """Pipeline fail-closed de citation audit pre-reveal.
 
-    def __init__(self) -> None:
+    Args:
+        corpus_version: "v11" (default, 12 articles) o "v12" (125 articles,
+            fetched with Playwright V2.3-E). V1.2 is the expanded corpus.
+    """
+
+    def __init__(self, *, corpus_version: str = "v11") -> None:
         self.log = get_logger("albra.knowledge.citation_audit")
+        self.corpus_version = corpus_version
         # Index corpus for fast lookup
         self._index = self._build_corpus_index()
+
+    def _get_corpus(self) -> list[tuple[str, dict[str, Any]]]:
+        """Returns the corpus list based on corpus_version."""
+        if self.corpus_version == "v12":
+            try:
+                from albra.knowledge.colombia.corpus_pilot.real_corpus_v12 import ALL_DOCUMENTS_V12
+                return ALL_DOCUMENTS_V12
+            except ImportError:
+                self.log.warning("citation_audit.v12_unavailable_fallback_v11")
+                return ALL_DOCUMENTS
+        return ALL_DOCUMENTS
 
     def _build_corpus_index(self) -> dict[str, dict[str, Any]]:
         """Indexa el corpus por nombre de documento y por número de artículo."""
         index: dict[str, dict[str, Any]] = {}
-        for _doc_type, doc in ALL_DOCUMENTS:
+        for _doc_type, doc in self._get_corpus():
             name = doc["number"]  # e.g. "Constitución Política de 1991"
             index[name] = {
                 "document_type": doc["document_type"],
