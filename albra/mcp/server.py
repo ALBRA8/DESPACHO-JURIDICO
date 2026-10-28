@@ -13,11 +13,34 @@ Métodos expuestos:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from albra.config.settings import Settings
 from albra.mcp.protocol import MCPCapability, MCPRequest, MCPResponse
+from albra.mcp.security import (
+    McpAuditEntry,
+    check_tool_permission,
+    create_dev_context,
+)
 from albra.observability.logger import get_logger
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _hash_dict(d: dict[str, Any]) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(
+        json.dumps(d, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _make_audit_entry(**kwargs: Any) -> McpAuditEntry:
+    """Create a McpAuditEntry from kwargs."""
+    return McpAuditEntry(**kwargs)
 
 
 class MCPServer:
@@ -239,7 +262,6 @@ class MCPServer:
 
 import json
 import sys
-from datetime import datetime
 from typing import Callable
 
 # JSON-RPC 2.0 error codes
@@ -276,8 +298,13 @@ class McpServer:
         matter_audit: Any = None,
         agent_loader: Any = None,
         playbook_loader: Any = None,
+        security_mode: str = "dev",
+        mcp_audit: Any = None,
     ) -> None:
         self.log = get_logger("albra.mcp.server.public")
+        # Security layer (V2.6 HARDENING)
+        self._security_mode = security_mode  # "dev" | "test" | "production"
+        self._mcp_audit = mcp_audit  # McpAuditLog or None
         # Dependencias inyectables (lazy init si None)
         self._matter_store: Any = matter_store
         self._matter_audit: Any = matter_audit
@@ -649,15 +676,113 @@ class McpServer:
             for name, t in self.tools.items()
         ]
 
-    def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Invoca una tool por name con args. Returns dict (result or error)."""
+    def call_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        auth_context: Any = None,
+    ) -> dict[str, Any]:
+        """Invoca una tool por name con args.
+
+        V2.6 HARDENING: call chain = Auth → RBAC → Audit → Execute.
+
+        Args:
+            name: Tool name.
+            args: Tool arguments.
+            auth_context: AuthContext (from albra.mcp.security). If None and
+                security_mode="production" → DENY. If None and security_mode="dev"
+                → auto-create dev context (backward compat).
+
+        Returns:
+            dict with result or error. Denied calls return:
+            {"error": "...", "status": "DENIED", "authorization": "DENIED"}
+        """
+        import time as _time
+        start = _time.time()
+        ts = _utcnow_iso()
+
+        # Resolve auth context
+        if auth_context is None:
+            if self._security_mode == "production":
+                # PRODUCTION: deny without auth
+                entry = _make_audit_entry(
+                    timestamp=ts, request_id="denied-no-auth", actor="anonymous",
+                    role="anonymous", auth_method="none", tool_name=name,
+                    action="mcp.tool.call", authorization_result="DENIED", denial_reason="No auth context (production mode)",
+                    input_hash=_hash_dict(args), output_hash="", matter_id="", correlation_id="denied",
+                    result_status="denied", error="No auth context", latency_ms=0,
+                    environment=self._security_mode,
+                )
+                if self._mcp_audit is not None:
+                    self._mcp_audit.record(entry)
+                return {
+                    "error": "FAIL-CLOSED: auth_context required in production mode",
+                    "status": "DENIED",
+                    "authorization": "DENIED",
+                    "reason": "No auth context provided",
+                }
+            # DEV/TEST: auto-create dev context for backward compat
+            auth_context = create_dev_context()
+
+        # Check tool exists
         if name not in self.tools:
-            return {"error": f"Unknown tool: {name}"}
+            return {"error": f"Unknown tool: {name}", "status": "NOT_FOUND"}
+
+        # RBAC permission check
+        allowed, reason = check_tool_permission(name, auth_context)
+        if not allowed:
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="DENIED", denial_reason=reason,
+                input_hash=_hash_dict(args), output_hash="", matter_id="", correlation_id=auth_context.request_id if auth_context else "denied",
+                result_status="denied", error=reason,
+                latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
+            return {
+                "error": f"RBAC DENY: {reason}",
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": reason,
+            }
+
+        # Execute tool handler
         try:
-            return self.tools[name]["handler"](args)
+            result = self.tools[name]["handler"](args)
+            latency = (_time.time() - start) * 1000
+            output_hash = _hash_dict(result) if isinstance(result, dict) else ""
+            matter_id = str(args.get("matter_id", "")) if isinstance(args, dict) else ""
+
+            # Record audit entry
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="ALLOWED", denial_reason="",
+                input_hash=_hash_dict(args), output_hash=output_hash, matter_id=matter_id, correlation_id=auth_context.request_id,
+                result_status="success" if "error" not in result else "error",
+                error=result.get("error", ""),
+                latency_ms=latency, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
+            return result
         except Exception as e:  # noqa: BLE001
+            latency = (_time.time() - start) * 1000
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="ALLOWED", denial_reason="",
+                input_hash=_hash_dict(args), output_hash="", matter_id="", correlation_id=auth_context.request_id if auth_context else "denied",
+                result_status="error", error=str(e),
+                latency_ms=latency, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
             self.log.error("mcp.tool.error", tool=name, error=str(e))
-            return {"error": str(e)}
+            return {"error": str(e), "status": "ERROR"}
 
     # ===== JSON-RPC 2.0 dispatch =====
 

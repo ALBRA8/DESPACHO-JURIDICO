@@ -132,37 +132,70 @@ class CitationAuditor:
 
     Args:
         corpus_version: "v11" (default, 12 articles) o "v12" (125 articles,
-            fetched with Playwright V2.3-E). V1.2 is the expanded corpus.
+            fetched with Playwright V2.3-E) o "v13" (125 articles with the
+            V1.3 DocumentProvenance model applied retroactively — see
+            albra.knowledge.provenance).
     """
 
     def __init__(self, *, corpus_version: str = "v11") -> None:
         self.log = get_logger("albra.knowledge.citation_audit")
         self.corpus_version = corpus_version
+        # V1.3 provenance enforcement — default off for backward compatibility.
+        # When True, citations from documents with provenance_status='NOT_VERIFIED'
+        # are BLOCKED at audit_response time.
+        self._provenance_required = False
         # Index corpus for fast lookup
         self._index = self._build_corpus_index()
 
     def _get_corpus(self) -> list[tuple[str, dict[str, Any]]]:
         """Returns the corpus list based on corpus_version."""
-        if self.corpus_version == "v12":
+        if self.corpus_version == "v13":
             try:
-                from albra.knowledge.colombia.corpus_pilot.real_corpus_v12 import ALL_DOCUMENTS_V12
+                from albra.knowledge.colombia.corpus_pilot.real_corpus_v13 import (
+                    ALL_DOCUMENTS_V13,
+                )
+                return ALL_DOCUMENTS_V13
+            except ImportError:
+                self.log.warning("citation_audit.v13_unavailable_fallback_v12")
+                # Fall through to v12.
+        if self.corpus_version in ("v12", "v13"):
+            try:
+                from albra.knowledge.colombia.corpus_pilot.real_corpus_v12 import (
+                    ALL_DOCUMENTS_V12,
+                )
                 return ALL_DOCUMENTS_V12
             except ImportError:
                 self.log.warning("citation_audit.v12_unavailable_fallback_v11")
-                return ALL_DOCUMENTS
         return ALL_DOCUMENTS
 
     def _build_corpus_index(self) -> dict[str, dict[str, Any]]:
-        """Indexa el corpus por nombre de documento y por número de artículo."""
+        """Indexa el corpus por nombre de documento y por número de artículo.
+
+        Handles both V1.1/V1.2 documents (which expose `raw_content`) and
+        V1.3 documents (which expose `reconstructed_text`, `provenance`, and
+        `provenance_status`). For V1.1/V1.2 documents we default
+        `provenance_status` to None (no provenance model was applied).
+        """
         index: dict[str, dict[str, Any]] = {}
         for _doc_type, doc in self._get_corpus():
             name = doc["number"]  # e.g. "Constitución Política de 1991"
+            # V1.3 documents store reconstructed_text (str) instead of
+            # raw_content (bytes). Both yield the same searchable plaintext.
+            if "reconstructed_text" in doc:
+                raw_text = doc["reconstructed_text"]
+            elif "raw_content" in doc:
+                raw = doc["raw_content"]
+                raw_text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            else:
+                raw_text = ""
             index[name] = {
                 "document_type": doc["document_type"],
                 "articles": {a["number"]: a["text"] for a in doc["articles"]},
-                "raw_text": doc["raw_content"].decode("utf-8", errors="replace")
-                    if isinstance(doc["raw_content"], bytes) else str(doc["raw_content"]),
+                "raw_text": raw_text,
                 "source_url": doc["source_url"],
+                # V1.3 provenance fields (None for V1.1/V1.2 documents).
+                "provenance_status": doc.get("provenance_status"),
+                "provenance": doc.get("provenance"),
             }
         return index
 
@@ -341,8 +374,24 @@ class CitationAuditor:
 
     # ===== Paso 4: audit_response (orquestador) =====
 
-    def audit_response(self, text: str) -> CitationAuditResult:
-        """Pipeline completo: extract → validate → retrace → reveal_or_block."""
+    def audit_response(
+        self,
+        text: str,
+        *,
+        require_provenance: bool | None = None,
+    ) -> CitationAuditResult:
+        """Pipeline completo: extract → validate → retrace → reveal_or_block.
+
+        Args:
+            text: Response text to audit before revealing to the lawyer.
+            require_provenance: If True, citations from documents with
+                `provenance_status='NOT_VERIFIED'` are BLOCKED. If None (default),
+                falls back to the instance's `_provenance_required` flag (which
+                defaults to False for backward compatibility).
+        """
+        if require_provenance is None:
+            require_provenance = self._provenance_required
+
         citations = self.extract_citations(text)
         verified, unverified, rejected = self.validate_against_corpus(citations)
 
@@ -352,6 +401,21 @@ class CitationAuditor:
         # Los que fallaron el retrace se mueven a unverified
         verified = passed_quotes
         unverified.extend(failed_quotes)
+
+        # V1.3: optional provenance enforcement. When require_provenance=True,
+        # citations from documents with provenance_status='NOT_VERIFIED' are
+        # moved from verified to unverified (blocking the response).
+        provenance_blocked: list[Citation] = []
+        if require_provenance:
+            still_verified: list[Citation] = []
+            for c in verified:
+                doc = self._index.get(c.document_name, {})
+                if doc.get("provenance_status") == "NOT_VERIFIED":
+                    provenance_blocked.append(c)
+                else:
+                    still_verified.append(c)
+            verified = still_verified
+            unverified.extend(provenance_blocked)
 
         total = len(citations)
         revealed = len(unverified) == 0 and len(rejected) == 0
@@ -364,16 +428,27 @@ class CitationAuditor:
         else:
             parts = []
             if unverified:
-                parts.append(f"{len(unverified)} unverified (not in corpus or quote mismatch)")
+                parts.append(
+                    f"{len(unverified)} unverified (not in corpus or quote mismatch"
+                    + (
+                        "; provenance_status=NOT_VERIFIED" if provenance_blocked else ""
+                    )
+                    + ")"
+                )
             if rejected:
-                parts.append(f"{len(rejected)} rejected (honestly — content not fetchable)")
-            reason = "BLOCKED: " + "; ".join(parts) + ". Fail-closed: response not revealed."
+                parts.append(
+                    f"{len(rejected)} rejected (honestly — content not fetchable)"
+                )
+            reason = (
+                "BLOCKED: " + "; ".join(parts) + ". Fail-closed: response not revealed."
+            )
 
         self.log.info(
             "citation_audit.complete",
             total=total, verified=len(verified),
             unverified=len(unverified), rejected=len(rejected),
-            revealed=revealed,
+            revealed=revealed, require_provenance=require_provenance,
+            provenance_blocked=len(provenance_blocked),
         )
         return CitationAuditResult(
             revealed=revealed,
