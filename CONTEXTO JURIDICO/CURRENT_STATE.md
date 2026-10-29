@@ -1,11 +1,193 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V5.1.1 CIERRE FINAL DEL GUARD DE CLI (FAIL-CLOSED)`
+- **Estado del documento:** `V5.2 CIERRE ACOTADO DE COBERTURA MULTITENANT EN CREATE_*`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V5.2:** `2568b0d` (V5.1.1 CURRENT_STATE)
+- **HEAD final V5.2:** `6c64ef9` (V5.2 cierre de cobertura multitenant en create_*)
+- **Push:** VERIFIED (2568b0d..6c64ef9 main)
+- **CI:** Run `40822914692`, commit `6c64ef9`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1344 passed, 5 skipped
+  - clean-room: SUCCESS
+
+## Commits V5.2
+
+| SHA | Mensaje |
+|---|---|
+| `6c64ef9` | fix: V5.2 — cierre acotado de cobertura multitenant en create_* |
+
+## Resumen ejecutivo V5.2
+
+V5.2 cierra la brecha de cobertura identificada en la auditoría
+independiente de V5.1: `MatterStore.create_matter()` y
+`MatterStore.create_pending_action()` no aplicaban `_require_tenant()`,
+aunque el informe V5.1 declaraba que la autorización multitenant estaba
+cerrada en todas las operaciones del almacén.
+
+**No se añaden funcionalidades jurídicas nuevas.** No se inicia
+refactorización general. Sólo se cierra la cobertura multitenant en las
+operaciones de creación y escritura, y se auditan los accesos SQL
+directos de `ApprovalChain`.
+
+## Brecha detectada en V5.1
+
+V5.1 declaró "aislamiento por tenant verificado por prueba negativa real
+en TODAS las rutas alcanzables desde la aplicación". La auditoría V5.2
+encontró que esta declaración era **incompleta**:
+
+| Operación | V5.1 status real | V5.2 status |
+|---|---|---|
+| `create_matter` | Sin `_require_tenant()`, default `"default"` | Fail-closed bajo `enforce_tenant=True` |
+| `create_pending_action` | Sin `tenant_id` param, sin verificación de matter ownership | Fail-closed + verificación cross-tenant |
+| `ApprovalChain.suggest` | Sin thread `tenant_id` | Thread al store |
+| `ApprovalChain.mark_executed` | Direct SQL UPDATE (audit V5.2 pidió revisar) | Auditado: precedido por 2 verificaciones de tenant, no bypass |
+
+### Detalle del defecto `create_pending_action`
+
+**Antes:** Tenant-A podía crear una pending action sobre un `matter_id`
+de Tenant-B. La acción se insertaba en `pending_actions` con
+`matter_id` válido de Tenant-B. Tenant-B vería una acción attacker-
+controlled en su workflow de aprobación — un atacante podría inyectar
+acciones que aparecerían como "pending approval" en el buzón de
+aprobación de Tenant-B.
+
+**Ahora:** bajo `enforce_tenant=True`, se verifica que el `matter_id`
+existe Y pertenece al tenant autorizado ANTES del INSERT. Cross-tenant
+creation → `KeyError` (sin revelar si el matter existe en otro tenant).
+No se persisten filas parciales.
+
+## Archivos modificados V5.2
+
+| Archivo | Cambios | Líneas |
+|---|---|---|
+| `albra/matters/store.py` | `create_matter()`: signature `tenant_id: str = "default"` → `tenant_id: str \| None = None` + `_require_tenant()` + default `"default"` en dev mode. `create_pending_action()`: add `tenant_id` param + `_require_tenant()` + cross-tenant matter ownership verification BEFORE any INSERT. | +68/-3 |
+| `albra/security/approval_chain.py` | `suggest()`: add `tenant_id` param, thread to store. `mark_executed()`: V5.2 audit docstring (no behavior change, no bypass). | +45/-2 |
+| `tests/matters/test_v5_audit_tenant.py` | Strengthened: 8 new negative cases added to existing `test_enforce_tenant_blocks_all_methods_when_tenant_id_missing` for `create_matter` (4) + `create_pending_action` (4). Setup updated to thread `tenant_id` (necessary because `create_pending_action` now enforces it). | +37/-0 |
+| `tests/matters/test_v52_create_tenant_authorization.py` | NEW: 27 functional tests, all real invocations (no string inspection). | +606 lines |
+
+**Sin debilitamiento de pruebas existentes.** El diff del test V5.1
+audit_tenant muestra sólo adiciones (8 nuevos casos negativos +
+actualización del setup para thread `tenant_id`). Ningún caso existente
+fue removido o debilitado.
+
+## Pruebas funcionales V5.2 (27 tests nuevos, todas con invocaciones reales)
+
+### tests/matters/test_v52_create_tenant_authorization.py
+
+| Categoría | Tests | Cobertura |
+|---|---|---|
+| A. `create_matter` sin tenant / None / "" / "default" → denegada | 4 | V5.2 brief punto "Creación de matter sin tenant, con None, cadena vacía y 'default': denegada en modo estricto" |
+| B. `create_matter` con tenant válido → asociada correctamente | 1 | V5.2 brief punto "Creación de matter con tenant válido: funciona y queda asociada al tenant correcto" |
+| C. `create_matter` no persiste nada tras denegación | 1 | V5.2 brief punto "Verificar que no haya escrituras parciales ni cambios persistidos tras una denegación" |
+| D. `create_pending_action` sin tenant válido → denegada | 2 | V5.2 brief punto "Creación de acción pendiente sin tenant válido: denegada en modo estricto" |
+| E. Tenant A crea action sobre matter de B → denegado + no DB change | 1 | V5.2 brief punto "Tenant A intenta crear una acción sobre un matter de B: denegado y sin cambios en la base de datos" |
+| F. `create_pending_action` sobre matter inexistente → denegada | 1 | Edge case: cross-tenant guard treats "not found" same as "not in tenant" (no info leak) |
+| G. Tenant A no puede approve/reject/mark_executed action de B | 3 | V5.2 brief punto "Tenant A no puede aprobar, rechazar ni marcar como ejecutada una acción de B" |
+| H. Same-tenant legítimo continúa funcionando | 3 | V5.2 brief punto "Las operaciones legítimas del mismo tenant siguen funcionando" |
+| I. Denegaciones no revelan datos del otro tenant | 1 | V5.2 brief punto "Las denegaciones no revelan datos del otro tenant" |
+| J. Cliente no puede desactivar `enforce_tenant` vía args | 2 | V5.2 brief punto "Verificar que las rutas de producción no puedan seleccionar o desactivar enforce_tenant mediante argumentos del cliente" |
+| K. No escrituras parciales tras denegación | 2 | V5.2 brief punto "Verificar que no haya escrituras parciales ni cambios persistidos tras una denegación" |
+| L. `ApprovalChain.suggest` threading tenant_id | 3 | V5.2 brief punto "Revisar las demás operaciones públicas de escritura y los accesos SQL directos de ApprovalChain" |
+| M. Legacy mode (enforce_tenant=False) preserva behavior | 3 | V5.2 brief punto "Mantener el comportamiento local/de desarrollo separado y explícito, sin debilitar el modo producción" |
+
+### tests/matters/test_v5_audit_tenant.py (extended)
+
+- `test_enforce_tenant_blocks_all_methods_when_tenant_id_missing`:
+  extended with 8 new cases for `create_matter` (4) and
+  `create_pending_action` (4). The setup was updated to thread
+  `tenant_id` when seeding the action (necessary because
+  `create_pending_action` now enforces it under `enforce_tenant=True`).
+- `test_enforce_tenant_allows_authorized_tenant_id`: extended to cover
+  `create_pending_action` with authorized `tenant_id`.
+
+## Conteos
+
+| Métrica | V5.1.1 (baseline) | V5.2 |
+|---|---|---|
+| Tests passed | 1317 | **1344** |
+| Tests skipped | 5 | **5** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+27** (new file) + **+0** (existing tests extended in-place) |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## Confirmación
+
+| Punto del brief V5.2 | Estado |
+|---|---|
+| 1. Revisar create_matter() y create_pending_action() | VERIFIED |
+| 1. Bajo enforce_tenant=True, ninguna creación/modificación sin tenant_id válido | VERIFIED (9 tests) |
+| 1. create_pending_action verifica matter_id existe y pertenece al tenant | VERIFIED (3 tests) |
+| 1. Tenant procede del contexto autenticado, no del cliente | VERIFIED (cliente no puede desactivar enforce_tenant vía args — 2 tests) |
+| 1. Mantener dev/producción separados, sin debilitar producción | VERIFIED (3 legacy mode regression tests + 3 same-tenant regression tests) |
+| 1. Revisar demás escrituras y accesos SQL directos de ApprovalChain | VERIFIED (mark_executed auditado, no bypass, documentado en docstring) |
+| 2. Pruebas invocan operaciones reales, no inspección textual | VERIFIED (27 tests con invocaciones reales, 0 string inspection) |
+| 3. Suite completa + Ruff + clean-room + matrix 3.10/3.11/3.12 | VERIFIED (CI run 40822914692 SUCCESS) |
+| 3. Revisar diff, comprobar que ninguna prueba se haya debilitado | VERIFIED (sólo adiciones a tests existentes, 0 debilitamiento) |
+| 3. Actualizar CURRENT_STATE.md | VERIFIED (este documento) |
+| 3. Publicar en main + comunicar SHAs + recuentos + enlaces CI | VERIFIED (ver cabecera) |
+| Restricción: No desplegar en producción | OK (no deploy) |
+| Restricción: No integrar OAuth/LLM/USDC/infra | OK (sin cambios externos) |
+| Restricción: No añadir funcionalidades jurídicas | OK (sólo cierre de seguridad) |
+| Restricción: No iniciar refactorización general | OK (mark_executed auditado pero no refactorizado — sería feature) |
+
+## Dictamen diferenciado (V5.2 brief)
+
+| Dimensión | Estado |
+|---|---|
+| **Seguridad verificada en código y pruebas** | VERIFIED — `create_matter` y `create_pending_action` aplican `_require_tenant()` bajo `enforce_tenant=True`; cross-tenant creation verificada antes de cualquier INSERT; `ApprovalChain.suggest` propaga `tenant_id`; `ApprovalChain.mark_executed` auditado (no bypass). 27 tests negativos nuevos + 8 cases extendidos invocan operaciones reales. |
+| **Autenticación OAuth real** | BLOQUEADA — requiere provider OAuth real (Auth0/Keycloak/GitHub OAuth App). `validate_bearer_token(mode="production")` retorna `None` para todos los tokens (fail-closed correcto). |
+| **Despliegue productivo** | BLOQUEADO — requiere infraestructura + secrets operativos. No se desplegó en V5.2 (cumple restricción del brief). |
+
+## Limitaciones externas pendientes
+
+| Componente | Razón |
+|---|---|
+| MCP OAuth production | Requiere provider OAuth real (Auth0/Keycloak/GitHub OAuth App) |
+| LLM Anthropic/OpenAI | Requiere API keys válidas |
+| USDC settlement | Requiere wallet + smart contract |
+| Deployment | Requiere infraestructura + secrets operativos |
+
+Ninguno es código ALBRA — todos son dependencias externas.
+
+## Rutas de ejecución y su estado de aislamiento (V5.2 actualizado)
+
+| Ruta | tenant_id enforced? | Estado V5.2 |
+|---|---|---|
+| MCP HTTP tools/call list_matters | SÍ (fail-closed en producción) | VERIFIED (V5.1) |
+| MCP HTTP tools/call advance_matter | SÍ (fail-closed en producción) | VERIFIED (V5.1) |
+| MCP HTTP tools/call verify_audit_chain | SÍ (fail-closed en producción) | VERIFIED (V5.1) |
+| MCP stdio tools/call | SÍ | VERIFIED (V5.1) |
+| **`MatterStore.create_matter`** | **SÍ (fail-closed en producción, V5.2)** | **VERIFIED (V5.2)** |
+| **`MatterStore.create_pending_action`** | **SÍ (fail-closed + cross-tenant matter check, V5.2)** | **VERIFIED (V5.2)** |
+| `MatterStore.get_matter` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.list_matters` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.advance_state` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.get_pending_action` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.list_pending` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.add_approval` | SÍ | VERIFIED (V5.1) |
+| `MatterStore.reject_action` | SÍ | VERIFIED (V5.1) |
+| **`ApprovalChain.suggest`** | **SÍ (thread tenant_id, V5.2)** | **VERIFIED (V5.2)** |
+| `ApprovalChain.approve` | SÍ | VERIFIED (V5.1) |
+| `ApprovalChain.reject` | SÍ | VERIFIED (V5.1) |
+| `ApprovalChain.can_execute` | SÍ | VERIFIED (V5.1) |
+| **`ApprovalChain.mark_executed`** | **SÍ (audit V5.2, no bypass)** | **VERIFIED (V5.2)** |
+| `ApprovalChain.get_status` | SÍ | VERIFIED (V5.1) |
+| `ApprovalChain.list_pending_for_matter` | SÍ | VERIFIED (V5.1) |
+| `ApprovalChain.list_all_pending` | SÍ | VERIFIED (V5.1) |
+| CLI matter_show/advance/list/new/timeline/audit | TÉCNICAMENTE BLOQUEADO en producción | VERIFIED (V5.1.1) |
+| CLI pending_list/approve | TÉCNICAMENTE BLOQUEADO en producción | VERIFIED (V5.1.1) |
+| CLI info/agent list/research | NO REQUIERE (tenant-agnostic read-only) | N/A |
+| MCPServer._m_tools_call (V1.6) | NO (legacy, not reachable) | NOT_REACHABLE |
+
+---
+
+# Histórico: V5.1.1 (cierre del guard de CLI fail-closed)
+
 - **HEAD inicial V5.1.1:** `c492a5d` (V5.1 CURRENT_STATE)
 - **HEAD final V5.1.1:** `19d045f` (V5.1.1 CLI guard fail-closed)
-- **Push:** VERIFIED (c492a5d..19d045f main)
 - **CI:** Run `40820289266`, commit `19d045f`, SUCCESS
   - lint: SUCCESS
   - test 3.10/3.11/3.12: 1317 passed, 5 skipped
