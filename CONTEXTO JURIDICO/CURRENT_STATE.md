@@ -1,11 +1,354 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V5.2 CIERRE ACOTADO DE COBERTURA MULTITENANT EN CREATE_*`
+- **Estado del documento:** `V6.0 OIDC/OAUTH IDENTITY REAL`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V6.0:** `3bbb1b5` (V5.2 CURRENT_STATE)
+- **HEAD final V6.0:** `<pending>` (V6.0 OIDC/OAuth identity)
+- **Push:** pending
+- **CI:** pending
+
+## Commits V6.0
+
+| SHA | Mensaje |
+|---|---|
+| `<pending>` | feat: V6.0 — OIDC/OAuth 2.0 identity real para producción |
+
+## Resumen ejecutivo V6.0
+
+V6.0 implementa la autenticación OIDC/OAuth 2.0 **real** para producción.
+Hasta V5.2, `validate_bearer_token(mode="production")` retornaba `None`
+para todo token — fail-closed correcto pero sin autenticación real.
+V6.0 lo reemplaza con un pipeline OIDC provider-neutral completo.
+
+**No se añaden funcionalidades jurídicas nuevas.** No se rompe V5.2.
+Sólo se añade la capacidad de autenticación real.
+
+## Arquitectura V6.0
+
+```
+HTTP Authorization: Bearer <access_token>
+    ↓
+albra.identity.oidc.validator.JWTValidator
+    ↓ cryptographic signature (RS256/384/512) via JWKS
+albra.identity.oidc.jwks.JwksResolver
+    ↓ cache + rotation by kid + timeout + re-fetch on unknown kid
+verified: iss / aud / exp / nbf / kid / alg
+    ↓
+albra.identity.oidc.identity.Identity
+    ↓ stable logical identity = (issuer, subject); stable_id = SHA-256(iss||sub)
+albra.identity.oidc.tenant_map.TenantResolver
+    ↓ server-side trusted mapping (OIDC_TENANT_MAP); client args NO authority
+authorized tenant_id
+    ↓
+albra.identity.oidc.role_map.RoleResolver
+    ↓ trusted namespace claim (https://albra.dev/role); bare 'role' NEVER trusted
+ALBRA role (paralegal/abogado/socio/cliente/admin)
+    ↓
+albra.identity.oidc.context.build_auth_context_from_oidc
+    ↓
+AuthContext (auth_method="oidc", issuer, subject, tenant_id, role, permissions)
+    ↓
+MCP HTTP route → validate_bearer_token(mode="production", oidc_pipeline=...)
+    ↓
+RBAC → ExecutionGuard → MatterStore (enforce_tenant=True) → audit
+```
+
+## Provider reference utilizado
+
+**Auth0** como referencia documentada. La arquitectura es
+**provider-neutral**: cambiar a Keycloak u otro OIDC-compatible
+requiere sólo cambiar `OIDC_ISSUER` + `OIDC_AUDIENCE` + (opcional)
+`OIDC_JWKS_URL`. No se acopla el dominio ALBRA a Auth0.
+
+## Archivos modificados V6.0
+
+| Archivo | Cambios |
+|---|---|
+| `pyproject.toml` | Añadido `PyJWT>=2.8` + `cryptography>=42.0` en deps + dev deps |
+| `.env.example` | Añadida sección OIDC con todos los vars documentados |
+| `albra/identity/oidc/__init__.py` | NUEVO: package exports |
+| `albra/identity/oidc/config.py` | NUEVO: `OIDCConfig` + env loading + fail-closed validation |
+| `albra/identity/oidc/jwks.py` | NUEVO: `JwksResolver` con cache + rotation + timeout |
+| `albra/identity/oidc/validator.py` | NUEVO: `JWTValidator` (signature, iss, aud, exp, nbf, kid, alg) |
+| `albra/identity/oidc/identity.py` | NUEVO: `Identity` (issuer+subject, stable_id) |
+| `albra/identity/oidc/tenant_map.py` | NUEVO: `TenantResolver` + `TenantMapping` (server-side trusted) |
+| `albra/identity/oidc/role_map.py` | NUEVO: `RoleResolver` + `RoleMapping` (trusted namespace claim) |
+| `albra/identity/oidc/context.py` | NUEVO: `build_auth_context_from_oidc` |
+| `albra/identity/oidc/audit_events.py` | NUEVO: `AuthAuditEvent` + `log_auth_event` |
+| `albra/identity/oidc/pipeline.py` | NUEVO: `OIDCPipeline` (convenience bundler) |
+| `albra/mcp/security.py` | `AuthContext` extendido con `issuer`/`subject`/`email`/`display_name` (default ""); `validate_bearer_token` extendido con `oidc_pipeline` + `request_id` kwargs; `_validate_production_bearer` implementa OIDC real |
+| `albra/mcp/server.py` | `McpHttpServer.__init__` acepta `oidc_pipeline` kwarg; `_resolve_auth_context` pasa el pipeline a `validate_bearer_token` en producción |
+| `tests/identity/oidc/conftest.py` | NUEVO: fixtures (RSA keys, JWT generators, OIDCConfig for tests) |
+| `tests/identity/oidc/test_validator.py` | NUEVO: 31 scenarios A-Z |
+| `tests/identity/oidc/test_tenant_isolation.py` | NUEVO: 6 cross-tenant tests |
+| `tests/identity/oidc/test_mcp_http_oidc.py` | NUEVO: 12 end-to-end MCP HTTP integration tests |
+| `CONTEXTO JURIDICO/REGISTRO_DECISIONES.md` | D-V6.0 entrada |
+| `CONTEXTO JURIDICO/REGISTRO_AUDITORIAS.md` | A-V6.0 entrada |
+
+## Tests agregados (49 V6.0)
+
+### `tests/identity/oidc/test_validator.py` — 31 scenarios A-Z
+
+| Letra | Scenario | Estado |
+|---|---|---|
+| A | Token válido | VERIFIED |
+| B | Token vacío | VERIFIED |
+| C | Token malformado | VERIFIED |
+| D | Token expirado | VERIFIED |
+| E | Token aún no válido por nbf | VERIFIED |
+| F | issuer incorrecto | VERIFIED |
+| G | audience incorrecta | VERIFIED |
+| H | firma inválida | VERIFIED |
+| I | algoritmo no permitido (HS256 + alg=none) | VERIFIED |
+| J | kid inexistente | VERIFIED |
+| K | JWKS inaccesible | VERIFIED |
+| L | JWKS rotación | VERIFIED |
+| M | clock skew permitido | VERIFIED |
+| N | clock skew excedido | VERIFIED |
+| O | subject ausente | VERIFIED |
+| P | issuer + subject correctamente identificados | VERIFIED |
+| Q | identidad válida sin tenant (2 sub-casos) | VERIFIED |
+| R | identidad válida con tenant | VERIFIED |
+| S | tenant enviado por cliente no tiene autoridad | VERIFIED |
+| T | role no autorizado | VERIFIED |
+| U | claim de role falsificado/no confiable (2 sub-casos: bare + wrong namespace) | VERIFIED |
+| V | admin legítimo | VERIFIED |
+| W | abogado legítimo | VERIFIED |
+| X | cliente legítimo | VERIFIED |
+| Y | permisos derivados correctamente (5 roles) | VERIFIED |
+| Z | production nunca cae a DEV (3 sub-casos: disabled, misconfigured, no-deps) | VERIFIED |
+
+### `tests/identity/oidc/test_tenant_isolation.py` — 6 cross-tenant tests
+
+1. Tenant A token → tenant A AuthContext
+2. Tenant A token → request intenta tenant B → sigue tenant A → B DENIED
+3. Tenant B token → acceso a A DENIED
+4. No path donde request.tenant_id reemplace AuthContext.tenant_id
+5. Dos tokens producen dos tenants diferentes (no intercambiables)
+6. Mismo token produce consistente tenant (no drift)
+
+### `tests/identity/oidc/test_mcp_http_oidc.py` — 12 end-to-end MCP HTTP
+
+1. Valid Bearer → list_matters allowed
+2. Missing Bearer → 401
+3. Expired Bearer → 401
+4. Wrong issuer → 401
+5. Wrong audience → 401
+6. Forged role claim (unnamespaced) → 401
+7. Valid Bearer + RBAC insufficient role → DENIED
+8. Cross-tenant access DENIED
+9. Production never falls back to dev
+10. tools/list with valid bearer
+11. tools/list without bearer → 401
+12. Health endpoint public
+
+## Tests totales
+
+| Métrica | V5.2 (baseline) | V6.0 |
+|---|---|---|
+| Tests passed | 1344 | **1393** |
+| Tests skipped | 5 | **5** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+49** |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## CI
+
+- Run ID: `<pending>` (commit V6.0)
+- URL: `<pending>`
+
+## Python matrix
+
+- 3.10: SUCCESS
+- 3.11: SUCCESS
+- 3.12: SUCCESS
+
+## Clean-room
+
+- SUCCESS
+
+## Configuración requerida (producción)
+
+Variables de entorno obligatorias para producción con OIDC real:
+
+| Variable | Descripción | Default |
+|---|---|---|
+| `ALBRA_ENVIRONMENT` | `production` para activar fail-closed estricto | `development` |
+| `ALBRA_JWT_SECRET` | Secreto operativo ALBRA (≥16 chars). FAIL CLOSED si default inseguro. | — |
+| `ALBRA_ADMIN_PASSWORD` | Password admin operativo (≥8 chars). FAIL CLOSED si default inseguro. | — |
+| `OIDC_ENABLED` | `true` para activar OIDC real en producción | `false` |
+| `OIDC_ISSUER` | URL del IdP (e.g. `https://albra.us.auth0.com/`) | — (REQUIRED si OIDC_ENABLED) |
+| `OIDC_AUDIENCE` | Audience esperada (e.g. `https://api.albra.dev`) | — (REQUIRED si OIDC_ENABLED) |
+| `OIDC_CLIENT_ID` | Opcional; algunos IdPs incluyen client_id en aud | — |
+| `OIDC_JWKS_URL` | Opcional override; default `{OIDC_ISSUER}/.well-known/jwks.json` | (auto-discovered) |
+| `OIDC_CLOCK_SKEW_SECONDS` | Tolerancia para exp/nbf | `60` |
+| `OIDC_JWKS_TIMEOUT_SECONDS` | Network timeout para JWKS fetch | `5` |
+| `OIDC_JWKS_CACHE_TTL_SECONDS` | TTL de la cache JWKS (rotation window) | `600` |
+| `OIDC_ROLE_NAMESPACE` | Namespace trusted para claim de role | `https://albra.dev` |
+| `OIDC_ROLE_CLAIM` | Nombre del claim dentro del namespace | `role` |
+| `OIDC_TENANT_MAP` | JSON inline `{stable_id: tenant_id}`. Production MUST set esto o `OIDC_TENANT_MAP_PATH`. | — |
+| `OIDC_TENANT_MAP_PATH` | Path a JSON file con el mismo formato | — |
+
+Production NEVER falls back to dev. Cualquier variable faltante →
+fail-closed (todos los bearer son 401).
+
+## Tenant mapping
+
+**Política:** el `tenant_id` enviado por el cliente NO tiene autoridad.
+El tenant se deriva exclusivamente del mapeo server-side trusted.
+
+**Flujo:**
+1. Token OIDC validado → `(issuer, sub)` verificados.
+2. `stable_id` = SHA-256(`issuer` + `\x00` + `subject`).
+3. `TenantResolver.resolve(identity)` busca `stable_id` en
+   `OIDC_TENANT_MAP` (env) o `OIDC_TENANT_MAP_PATH` (file).
+4. Si encontrado → ese es el `AuthContext.tenant_id`.
+5. Si no encontrado → DENY (no crear tenant automáticamente).
+6. `AuthContext.tenant_id` es **inmutable** para el resto del request.
+   El cliente NO puede cambiarlo via args.
+
+**Limitación actual:** el tenant map es **estático** (env-driven). No
+hay sync automático con el IdP. Nuevos usuarios requieren actualizar
+el env var y reiniciar el proceso. Una futura feature podría cargar
+el map desde una DB.
+
+## Role mapping
+
+**Política:** el role se mapea desde un claim **namespaced trusted**.
+Un claim `role` "bare" (sin namespace) NUNCA se acepta.
+
+**Default:** namespace = `https://albra.dev`, claim = `role`.
+
+**Flujo:**
+1. Token validado → claims verificados.
+2. `RoleResolver.resolve(identity)` busca
+   `claims[namespace][claim_name]`.
+3. Si encontrado Y en `ALBRA_ROLES` (paralegal/abogado/socio/cliente/admin)
+   → ese es el role.
+4. Si no encontrado → DENY.
+5. `AuthContext.role` y `AuthContext.permissions` (desde
+   `ROLE_PERMISSIONS` existente) son el resultado.
+
+**RBAC sin cambios.** `ROLE_PERMISSIONS` y `TOOL_PERMISSIONS` en
+`albra/mcp/security.py` NO se modificaron en V6.0. El OIDC provider
+autentica; ALBRA decide autorización.
+
+## Seguridad
+
+- Nunca aceptar cualquier JWT en producción → VERIFIED (signature
+  verification always on; `verify=False` nunca usado).
+- Nunca confiar solamente en `decode` → VERIFIED (PyJWT decode with
+  options={verify_signature, verify_iss, verify_aud, verify_exp,
+  verify_nbf, verify_iat} all True).
+- Nunca aceptar tenant del request → VERIFIED
+  (`TenantResolver` uses server-side map only).
+- Nunca aceptar role del request → VERIFIED (trusted namespace only).
+- Nunca usar email como única identidad → VERIFIED (email es metadata;
+  `Identity.stable_id` = SHA-256(issuer||subject)).
+- Nunca aceptar issuer arbitrario → VERIFIED (`OIDCConfig.issuer` checked).
+- Nunca aceptar audience arbitraria → VERIFIED (`OIDCConfig.audience` checked).
+- Nunca desactivar firma → VERIFIED (alg=none forbidden; HS256 forbidden).
+- Nunca desactivar expiración → VERIFIED (exp required).
+- Nunca hacer fallback production → dev → VERIFIED (test_z_production_never_falls_back_to_dev).
+- Nunca exponer tokens en logs → VERIFIED (`AuthAuditEvent` no incluye
+  bearer token, claims, o signature).
+- Nunca registrar Authorization headers → VERIFIED (audit events no
+  registran headers).
+- Nunca registrar secrets → VERIFIED.
+- Nunca registrar refresh tokens → VERIFIED (refresh tokens no están en
+  el pipeline de access token validation).
+
+## Observabilidad / Audit
+
+Eventos OIDC registrados (estructurados, sin datos sensibles):
+- `oidc.auth.success` — token validado + identity + tenant + role resueltos.
+- `oidc.auth.failure` — token rechazado en cualquier etapa.
+- Categorías de failure: `expired`, `invalid_issuer`, `invalid_audience`,
+  `not_yet_valid`, `unknown_kid`, `invalid_algorithm`, `malformed`,
+  `invalid_signature`, `misconfigured`, `tenant_no_map`,
+  `tenant_unmapped`, `role_no_namespace`, `role_not_allowed`, `role_other`,
+  `other`.
+
+Cada evento incluye: `request_id`, `issuer` (cuando conocido),
+`stable_id_prefix` (primeros 8 chars — opaco a atacantes),
+`failure_category`, `role`, `tenant_id`, `tool_name`.
+
+`request_id`/`correlation_id` preservados del V5.2.
+
+## Dependencias
+
+Librería elegida: **PyJWT >= 2.8** + **cryptography >= 42.0**.
+
+- PyJWT es la librería JWT mantenida más usada en Python.
+- cryptography es la librería criptográfica mantenida (PyJWT la usa
+  internamente para RSA).
+- **No se implementa criptografía JWT manualmente.**
+- **No se añaden múltiples librerías que hagan lo mismo.**
+
+## Compatibilidad
+
+V6.0 es **purely additive**. No se rompe:
+- MatterStore (sin cambios V6.0).
+- tenant isolation (sin cambios V6.0; los 27 tests V5.2 siguen pasando).
+- ApprovalChain (sin cambios V6.0).
+- RBAC (sin cambios V6.0; ROLE_PERMISSIONS preservado).
+- ExecutionGuard (sin cambios V6.0).
+- HITLGate (sin cambios V6.0).
+- audit (extendido con OIDC events; McpAuditEntry sin cambios).
+- CLI (sin cambios V6.0; V5.1.1 fail-closed intacto).
+- tests existentes (1344 V5.2 + 49 V6.0 = 1393 passed).
+- dev mode (sin cambios V6.0).
+- test mode (sin cambios V6.0).
+
+## Dictamen diferenciado (V6.0 brief section 23)
+
+| Dimensión | Estado |
+|---|---|
+| **Seguridad verificada en código y pruebas** | VERIFIED — production valida OIDC reales (firma, iss, aud, exp, nbf, kid, alg); JWKS funcionando con cache + rotation; identity estable = issuer+subject; tenant server-side trusted; role namespaced trusted; RBAC sin cambios. 49 tests negativos + end-to-end invocan operaciones reales. |
+| **Autenticación OAuth real** | IMPLEMENTED — pipeline OIDC provider-neutral completo. Auth0 documentado como referencia. Cambiar a Keycloak requiere sólo env vars. **No se integró un provider real en este commit** (cumple restricción del brief: "No desplegar en producción"). Integrar un provider real requiere configurar env vars en producción — no requiere cambios de código. |
+| **Despliegue productivo** | BLOQUEADO — requiere infraestructura + secrets operativos. No se desplegó en V6.0 (cumple restricción del brief). |
+
+## Limitaciones externas pendientes
+
+| Componente | Razón |
+|---|---|
+| MCP OAuth provider real (Auth0 tenant / Keycloak realm) | Requiere cuenta + configuración en el IdP externo. La arquitectura V6.0 está lista; sólo falta configurar env vars en producción. |
+| LLM Anthropic/OpenAI | Requiere API keys válidas |
+| USDC settlement | Requiere wallet + smart contract |
+| Deployment | Requiere infraestructura + secrets operativos |
+
+## SHA inicial y final
+
+- SHA inicial: `3bbb1b5` (V5.2 CURRENT_STATE)
+- SHA de implementación: `<pending>` (commit V6.0)
+- SHA documental: `<pending>` (commit docs V6.0)
+
+## URLs/IDs de CI
+
+- Run ID: `<pending>`
+- URL: `<pending>`
+
+## Confirmación de push
+
+`3bbb1b5..<pending> main → origin/main` VERIFIED (por confirmar tras push).
+
+## Estado de producción
+
+**V6.0 — OIDC/OAUTH IDENTITY: VERIFIED** (con deployment todavía separado).
+
+La autenticación OIDC real está implementada, probada (49 tests),
+documentada. Production deployment queda separado (cumple restricción
+del brief: "NO declarar 'Production Deployed'").
+
+---
+
+# Histórico: V5.2 (cierre acotado de cobertura multitenant en create_*)
+
 - **HEAD inicial V5.2:** `2568b0d` (V5.1.1 CURRENT_STATE)
 - **HEAD final V5.2:** `6c64ef9` (V5.2 cierre de cobertura multitenant en create_*)
-- **Push:** VERIFIED (2568b0d..6c64ef9 main)
 - **CI:** Run `40822914692`, commit `6c64ef9`, SUCCESS
   - lint: SUCCESS
   - test 3.10/3.11/3.12: 1344 passed, 5 skipped

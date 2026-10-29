@@ -1190,11 +1190,17 @@ class McpHttpServer:
         *,
         mcp_server: McpServer | None = None,
         auth_mode: str = "dev",
+        oidc_pipeline: Any = None,
     ) -> None:
         self.host = host
         self.port = port
         self.oauth_required = oauth_required
         self._auth_mode = auth_mode  # "dev" | "test" | "production"
+        # V6.0: optional OIDC pipeline for production mode. If None,
+        # validate_bearer_token constructs the pipeline lazily from env
+        # (per-call, less efficient). For production deployments, pass
+        # a shared pipeline so the JWKS cache is reused across requests.
+        self._oidc_pipeline = oidc_pipeline
         self.log = get_logger("albra.mcp.http")
         # Reuse the McpServer with the 10 tools (injectable for tests)
         # Pass security_mode so call_tool uses the same auth mode
@@ -1465,10 +1471,14 @@ class McpHttpServer:
     def _resolve_auth_context(self, token: str | None) -> AuthContext | None:
         """Resolve a bearer token into an AuthContext.
 
-        In production mode: returns None for ALL tokens (requires real OAuth).
+        V6.0: in production mode, this delegates to
+        ``validate_bearer_token(mode="production", oidc_pipeline=...)``
+        which runs the full OIDC pipeline (JWT signature → iss → aud →
+        exp → nbf → kid → identity → tenant → role → AuthContext).
+
         In test mode: accepts role-prefixed test tokens (test-abogado-xxx, etc.).
         In dev mode: accepts any non-empty token (returns dev admin context).
-        Scaffold-issued OAuth tokens are accepted in dev/test modes.
+        Scaffold-issued OAuth tokens are accepted in dev/test modes only.
         """
         if not token:
             return None
@@ -1480,6 +1490,11 @@ class McpHttpServer:
                 return create_test_context(role="admin")
             return create_dev_context(role="admin")
         # Use validate_bearer_token from security.py
+        # V6.0: pass the shared OIDC pipeline if available (production).
+        if self._auth_mode == "production" and self._oidc_pipeline is not None:
+            return validate_bearer_token(
+                token, mode=self._auth_mode, oidc_pipeline=self._oidc_pipeline,
+            )
         return validate_bearer_token(token, mode=self._auth_mode)
 
     # ===== Response builders =====
