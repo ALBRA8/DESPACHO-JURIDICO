@@ -330,6 +330,8 @@ class McpServer:
         # Registry: name -> {description, inputSchema, handler}
         self.tools: dict[str, dict[str, Any]] = {}
         self._register_default_tools()
+        # Stdio auth context (set from initialize params, used in tools/call)
+        self._stdio_auth_context: AuthContext | None = None
 
     # ===== Dependency injection (lazy defaults) =====
 
@@ -884,6 +886,14 @@ class McpServer:
 
         try:
             if method == "initialize":
+                # V3.0: Extract auth from initialize params (stdio path)
+                if isinstance(params, dict) and "auth" in params:
+                    auth_data = params["auth"]
+                    if isinstance(auth_data, dict) and auth_data.get("token"):
+                        token = auth_data["token"]
+                        self._stdio_auth_context = validate_bearer_token(
+                            token, mode=self._security_mode
+                        )
                 result: dict[str, Any] = {
                     "protocolVersion": _MCP_PROTOCOL_VERSION,
                     "serverInfo": {
@@ -914,7 +924,7 @@ class McpServer:
                         "code": _INVALID_PARAMS,
                         "message": "'arguments' must be an object.",
                     })
-                tool_result = self.call_tool(name, arguments)
+                tool_result = self.call_tool(name, arguments, auth_context=self._stdio_auth_context)
                 # Si el handler devolvió un error explícito, propagar como
                 # result (MCP permite tool errors como content isError).
                 return make_response(result={
