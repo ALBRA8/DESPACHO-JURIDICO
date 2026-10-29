@@ -1,12 +1,119 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V7.0 GRADUACIÓN DEL ABOGADO OPERATIVO`
+- **Estado del documento:** `V8.0 FASE 1 — CORPUS V1.4 CON RAW_BYTES PRESERVADO`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V8.0 Fase 1:** `2fd7cee` (V7.0 CURRENT_STATE)
+- **HEAD final V8.0 Fase 1:** `47a5bd1` (V8.0 Fase 1 — Corpus V1.4)
+- **Push:** VERIFIED (2fd7cee..47a5bd1 main)
+- **CI:** Run `40869679388`, commit `47a5bd1`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1447 passed, 7 skipped
+  - clean-room: SUCCESS
+
+## Commits V8.0 Fase 1
+
+| SHA | Mensaje |
+|---|---|
+| `47a5bd1` | feat: V8.0 Fase 1 — Corpus V1.4 con raw_bytes preservado + 2107 artículos |
+
+## Resumen ejecutivo V8.0 Fase 1
+
+Fase 1 del plan V8.0: ampliación verificable del corpus jurídico
+colombiano y preservación criptográfica de la procedencia original.
+Cierra las brechas B1 (Constitución incompleta), B2 (sin
+jurisprudencia), B3 (sin cuerpos procesales) y B4 (raw_bytes no
+preservados).
+
+Trazabilidad:
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC
+- V7.0 → graduación del abogado operativo
+- V8.0 Fase 1 → Corpus V1.4 (este documento)
+
+## Corpus V1.4 — cobertura REAL
+
+| Documento | Artículos | Range | raw_bytes (bytes) | raw_bytes_hash | provenance_status |
+|---|---|---|---|---|---|
+| Constitución 1991 | 380 | 1-380 | 1,738,710 | `4fc38c32...` | VERIFIED |
+| Ley 1564/2012 CGP | 627 | 1-627 | 2,419,510 | `36a2fcc5...` | VERIFIED |
+| Ley 640/2001 | 51 | 1-66 | 114,785 | `885f3c70...` | VERIFIED |
+| Ley 906/2004 CPP | 564 | 1-564 | 1,502,955 | `4f24ffc3...` | VERIFIED |
+| Código Sustantivo del Trabajo | 485 | 1-492 | 1,490,831 | `8be836f9...` | VERIFIED |
+| Sentencia T-001/2020 | (full text) | — | 163,293 | `2adec5e3...` | VERIFIED |
+| Sentencia T-002/2020 | (full text) | — | 354,085 | `a61431fe...` | VERIFIED |
+| Sentencia T-003/2020 | (full text) | — | 116,401 | `0c2fa8f1...` | VERIFIED |
+| Sentencia T-100/2020 | (full text) | — | 229,992 | `6064a637...` | VERIFIED |
+| Sentencia T-445/2020 | (full text) | — | 296,132 | `053133d5...` | VERIFIED |
+| **Total** | **2107 articles + 5 sentencias** | — | **8,426,694 (8.0 MB)** | — | **10/10 VERIFIED** |
+
+## Comparación V1.3 vs V1.4
+
+| Métrica | V1.3 | V1.4 |
+|---|---|---|
+| Documentos | 3 | 10 |
+| Artículos estatutarios | 125 | 2107 |
+| Sentencias Corte Constitucional | 0 | 5 |
+| raw_bytes preservados | 0 bytes | 8.0 MB |
+| Docs con provenance VERIFIED | 0 | 10 (100%) |
+| Docs con raw_bytes_hash=NOT_VERIFIED | 3 | 0 |
+
+## Brechas cerradas
+
+| Brecha | Descripción | Estado |
+|---|---|---|
+| B1 | Constitución arts. 1-32 → completa 1-380 | CERRADA (380/380) |
+| B2 | 0 jurisprudencia → ≥5 sentencias reales | CERRADA (5 sentencias) |
+| B3 | 0 cuerpos procesales → CGP + Ley 640 + CPP + CST | CERRADA (4 documentos) |
+| B4 | raw_bytes_hash=NOT_VERIFIED → VERIFIED | CERRADA (10/10) |
+
+## Integridad criptográfica (3 capas × 10 docs = 30/30)
+
+- 10/10 raw_bytes_hash: SHA-256 de los bytes HTTP originales → PASS
+- 10/10 normalized_text_hash: SHA-256 del texto limpio → PASS
+- 10/10 reconstructed_text_hash: SHA-256 del "ARTICULO N. <texto>" → PASS
+- 10/10 DocumentProvenance.verify_integrity(): todos *_hash_ok=True → PASS
+
+## V1.3 preservado
+
+- ALL_DOCUMENTS_V13 re-exportado sin cambios desde real_corpus_v14.py
+- 3 documentos, 125 artículos, provenance_status=PARTIAL (sin cambios)
+- raw_bytes_hash=NOT_VERIFIED para los 3 (limitación V1.2 preservada)
+
+## AGENTE-GENERAL intacto
+
+- HEAD: `69c79da` (origin/main)
+- Sin modificaciones por V8.0 Fase 1
+
+## Fix técnico del parser
+
+El parser original no decodificaba entidades HTML (ART&Iacute;CULO) antes
+del regex matching, causando 5 artículos constitucionales faltantes
+(15, 257, 262, 263, 269). Corregido con `html_mod.unescape()` antes del
+regex. Constitución: 375 → 380 artículos (exactamente 380/380).
+
+## Tests V8.0 Fase 1
+
+- 22 tests V1.4 nuevos (cobertura, integridad, preservación V1.3)
+- 1447 passed total (1425 V7.0 + 22 V1.4)
+- 7 skipped (5 corpus V1.1 + 2 NVIDIA live)
+- 0 failed
+- 0 regresión sobre V7.0
+
+## Próximas fases (NO iniciadas)
+
+- Fase 2: Validación jurídica (VigencyChecker + ContradictionDetector + AdversarialValidator)
+- Fase 3: Pool de especialistas (arquitectura de contrato, sin desplegar)
+- Fase 4: Preparación para producción (solo documentación)
+
+---
+
+# Histórico: V7.0 (graduación del abogado operativo)
+
 - **HEAD inicial V7.0:** `da4face` (V6.0.1 CURRENT_STATE)
 - **HEAD final V7.0:** `0aa8dc2` (V7.0 graduación del abogado operativo)
-- **Push:** VERIFIED (da4face..0aa8dc2 main)
-- **CI:** Run `40838036263`, commit `0aa8dc2`, pending
+- **CI:** Run `40838036263`, commit `0aa8dc2`, SUCCESS
 
 ## Commits V7.0
 
