@@ -596,7 +596,8 @@ class McpServer:
     def _tool_audit_citation(self, args: dict[str, Any]) -> dict[str, Any]:
         """Tool 1: audit_citation(text) → CitationAuditResult.as_dict()."""
         from albra.knowledge.citation_audit import CitationAuditor
-        auditor = CitationAuditor()
+        # V4.0: use V1.3 corpus (125 articles with provenance) instead of V1.1 (12)
+        auditor = CitationAuditor(corpus_version="v13")
         result = auditor.audit_response(args["text"])
         return result.as_dict()
 
@@ -645,9 +646,15 @@ class McpServer:
         return audit.verify_chain(args["matter_id"])
 
     def _tool_list_matters(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool 7: list_matters(state, area) → {matters: list[Matter.as_dict()], count}."""
+        """Tool 7: list_matters(state, area) → {matters: list, count}.
+
+        V4.0: tenant_id derived from _auth (injected by call_tool),
+        NOT from client args. Prevents cross-tenant data leak.
+        """
         store = self._store()
-        kwargs: dict[str, Any] = {}
+        auth_meta = args.get("_auth", {})
+        tenant_id = auth_meta.get("tenant_id", "default")
+        kwargs: dict[str, Any] = {"tenant_id": tenant_id}
         if args.get("state"):
             kwargs["state"] = args["state"]
         if args.get("area"):
@@ -839,10 +846,39 @@ class McpServer:
                     "reason": injection_reason,
                 }
         except ImportError:
-            pass  # data_boundary not available — continue without check
+            # V4.0: fail-closed — if detector unavailable, DENY
+            self.log.error("mcp.data_boundary_unavailable", tool=name)
+            entry = _make_audit_entry(
+                timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                role=auth_context.role, auth_method=auth_context.auth_method,
+                tool_name=name, action="mcp.tool.call", authorization_result="DENIED",
+                denial_reason="FAIL-CLOSED: data_boundary module unavailable",
+                input_hash=_hash_dict(args), output_hash="", matter_id="",
+                correlation_id=auth_context.request_id,
+                result_status="denied", error="data_boundary module unavailable",
+                latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
+            )
+            if self._mcp_audit is not None:
+                self._mcp_audit.record(entry)
+            return {
+                "error": "FAIL-CLOSED: prompt injection detector unavailable",
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": "data_boundary module could not be imported",
+            }
+
+        # V4.0: Inject auth context metadata into args for tenant-aware handlers
+        args_with_auth = dict(args) if isinstance(args, dict) else args
+        if isinstance(args_with_auth, dict):
+            args_with_auth["_auth"] = {
+                "tenant_id": auth_context.tenant_id,
+                "role": auth_context.role,
+                "identity": auth_context.identity,
+                "request_id": auth_context.request_id,
+            }
 
         try:
-            result = self.tools[name]["handler"](args)
+            result = self.tools[name]["handler"](args_with_auth)
             latency = (_time.time() - start) * 1000
             output_hash = _hash_dict(result) if isinstance(result, dict) else ""
             matter_id = str(args.get("matter_id", "")) if isinstance(args, dict) else ""
