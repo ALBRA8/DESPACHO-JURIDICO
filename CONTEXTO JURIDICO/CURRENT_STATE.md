@@ -1,72 +1,71 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V4.1 CIERRE DE SEGURIDAD RESIDUAL`
+- **Estado del documento:** `V5.0 HARDENING INTEGRAL`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
-- **HEAD inicial V4.1:** `d713c5c` (V4.0 CURRENT_STATE)
-- **HEAD final V4.1:** `c5d5ae8` (V4.1 multitenant isolation end-to-end)
+- **HEAD inicial V5.0:** `cdbd795` (V4.1 CURRENT_STATE)
+- **HEAD final V5.0:** `d10f40f` (V5.0 verify_audit_chain tenant isolation)
 - **Push:** VERIFIED
-- **CI:** Run `40813172756`, commit `c5d5ae8`, SUCCESS
+- **CI:** Run `40814871546`, commit `d10f40f`, SUCCESS
   - lint: SUCCESS
-  - test 3.10/3.11/3.12: 1271 passed, 5 skipped
+  - test 3.10/3.11/3.12: 1275 passed, 5 skipped
   - clean-room: SUCCESS
 
-## Commits V4.1
+## Commits V5.0
 
 | SHA | Mensaje |
 |---|---|
-| `c5d5ae8` | multitenant isolation end-to-end (get_matter/advance_state/pending/approval/reject) |
+| `d10f40f` | verify_audit_chain tenant isolation + list_matters consistency + CLI documented |
 
-## Bloqueo cerrado en V4.1
+## Bloqueos cerrados en V5.0
 
-### Aislamiento multitenant end-to-end
+### 1. verify_audit_chain cross-tenant access
+**Antes:** `_tool_verify_audit_chain` no verificaba tenant_id → tenant-A podía leer audit chain de tenant-B.
+**Ahora:** Verifica `store.get_matter(matter_id, tenant_id=tenant_id)` antes de leer audit.
 
-**Antes (V4.0):** Solo `list_matters` filtraba por `tenant_id`. Las operaciones por ID
-(`get_matter`, `advance_state`, `get_pending_action`, `list_pending`, `add_approval`,
-`reject_action`) NO verificaban tenant → cross-tenant access por ID era posible.
+### 2. list_matters get_matter consistency
+**Antes:** `list_matters` filtraba por tenant en SQL pero `get_matter(mid)` no pasaba tenant.
+**Ahora:** `get_matter(mid, tenant_id=tenant_id)` — re-verificación consistente.
 
-**Ahora (V4.1):** TODAS las operaciones de `MatterStore` aceptan `tenant_id` y verifican
-pertenencia antes de retornar o modificar datos.
+### 3. CLI documented as LOCAL_ONLY
+**Limitación documentada:** CLI commands llaman MatterStore directamente sin AuthContext.
+Aceptable para desarrollo local. Producción usa MCP HTTP que enforcea tenant_id.
 
-| Operación | Verificación |
-|---|---|
-| get_matter(id, tenant_id) | WHERE id=? AND tenant_id=? → None si no match |
-| advance_state(id, target, tenant_id) | get_matter with tenant → KeyError si no match |
-| get_pending_action(id, tenant_id) | Verifica matter.tenant_id matches |
-| list_pending(tenant_id) | JOIN matters WHERE tenant_id=? |
-| add_approval(id, tenant_id) | get_pending_action with tenant → KeyError |
-| reject_action(id, tenant_id) | get_pending_action with tenant → KeyError |
+### 4. All MatterStore methods verified
+Test automatizado verifica que get_matter, advance_state, get_pending_action,
+list_pending, add_approval, reject_action, list_matters — todos aceptan tenant_id.
 
-### Pruebas negativas (10 tests)
-
-| Test | Demuestra |
-|---|---|
-| test_get_matter_tenant_a_cannot_read_tenant_b | Cross-tenant read by ID blocked |
-| test_advance_state_tenant_a_cannot_advance_tenant_b | Cross-tenant advance blocked |
-| test_list_pending_tenant_a_cannot_see_tenant_b | Cross-tenant pending enumeration blocked |
-| test_get_pending_action_tenant_a_cannot_read_tenant_b | Cross-tenant pending read blocked |
-| test_add_approval_tenant_a_cannot_approve_tenant_b | Cross-tenant approval blocked |
-| test_reject_action_tenant_a_cannot_reject_tenant_b | Cross-tenant rejection blocked |
-| test_mcp_list_matters_args_tenant_override_blocked | Args tenant_id override blocked |
-| test_mcp_advance_matter_cross_tenant_blocked | MCP cross-tenant advance blocked |
-| test_mcp_pending_isolated_by_tenant | Store-level isolation verified |
-| test_legitimate_tenant_a_flows_work | No regression in legitimate flows |
-
-## Arquitectura MCP V4.1
+## Arquitectura de seguridad MCP V5.0
 
 ```
-HTTP → Bearer → validate_bearer_token → AuthContext
+HTTP → Bearer → validate_bearer_token(mode) → AuthContext
   → call_tool(name, args, auth_context=ctx)
-    → RBAC (check_tool_permission)
-    → LegalGate (evaluate)
-    → ExecutionGuard (check with policy_state, autonomy, rbac)
-    → Prompt injection (is_prompt_injection) — fail-closed if unavailable
+    → [production mode + no ctx → DENY fail-closed]
+    → RBAC: check_tool_permission(name, ctx)
+    → LegalGate: evaluate("tool_invocation")
+    → ExecutionGuard: check(policy_state, autonomy, rbac_fn, legal_verdict)
+    → Prompt injection: is_prompt_injection(str(args)) [fail-closed if unavailable]
     → Inject _auth {tenant_id, role, identity, request_id} into args
-    → Tool handler(args_with_auth)
-      → _tool_list_matters: store.list_matters(tenant_id=args._auth.tenant_id)
-      → _tool_advance_matter: store.advance_state(tenant_id=args._auth.tenant_id)
-    → Audit (McpAuditEntry with input_hash, output_hash, correlation_id)
+    → Tool handler(args_with_auth):
+        _tool_list_matters:     store.list_matters(tenant_id=args._auth.tenant_id)
+        _tool_advance_matter:    store.advance_state(tenant_id=args._auth.tenant_id)
+        _tool_verify_audit_chain: store.get_matter(tenant_id=args._auth.tenant_id) → verify
+    → Audit: McpAuditEntry (input_hash, output_hash, correlation_id)
 ```
+
+## Rutas de ejecución y su estado de aislamiento
+
+| Ruta | tenant_id enforced? | Estado |
+|---|---|---|
+| MCP HTTP tools/call | SÍ (auth_context.tenant_id → _auth → store) | VERIFIED |
+| MCP stdio tools/call | SÍ (initialize auth → _stdio_auth_context → _auth → store) | VERIFIED |
+| MCP HTTP list_matters | SÍ | VERIFIED |
+| MCP HTTP advance_matter | SÍ | VERIFIED |
+| MCP HTTP verify_audit_chain | SÍ (V5.0 fix) | VERIFIED |
+| CLI matter_show | NO (local development only) | LOCAL_ONLY |
+| CLI matter_advance | NO (local development only) | LOCAL_ONLY |
+| CLI matter_list | NO (local development only) | LOCAL_ONLY |
+| MCPServer._m_tools_call (V1.6) | NO (legacy, not reachable from V2.3+ McpServer) | NOT_REACHABLE |
 
 ## Corpus por ruta
 
@@ -75,15 +74,15 @@ HTTP → Bearer → validate_bearer_token → AuthContext
 | MCP audit_citation | V1.3 | 125 |
 | MCP search_corpus | V1.1 (default_rag) | 12 |
 
-**Limitación:** search_corpus usa V1.1 porque LocalRAG.default_rag() carga V1.1.
-
 ## Limitaciones
 
 | Componente | Estado |
 |---|---|
 | Corpus V1.3 raw_bytes | VERIFIED WITH LIMITATIONS |
+| search_corpus V1.1 | VERIFIED WITH LIMITATIONS |
+| CLI sin tenant_id | LOCAL_ONLY (documented) |
+| MCPServer._m_tools_call | NOT_REACHABLE (legacy) |
 | MCP OAuth production | BLOCKED BY EXTERNAL DEPENDENCY |
 | LLM Anthropic/OpenAI | BLOCKED BY EXTERNAL DEPENDENCY |
 | USDC settlement | BLOCKED BY EXTERNAL DEPENDENCY |
 | Deployment | BLOCKED BY EXTERNAL DEPENDENCY |
-| search_corpus V1.1 | VERIFIED WITH LIMITATIONS |
