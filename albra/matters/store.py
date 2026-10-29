@@ -237,7 +237,7 @@ class MatterStore:
         q += " ORDER BY created_at DESC LIMIT ?"
         args.append(limit)
         cur = self._conn.execute(q, args)
-        return [m for (mid,) in cur.fetchall() if (m := self.get_matter(mid)) is not None]
+        return [m for (mid,) in cur.fetchall() if (m := self.get_matter(mid, tenant_id=tenant_id)) is not None]
 
     def advance_state(
         self,

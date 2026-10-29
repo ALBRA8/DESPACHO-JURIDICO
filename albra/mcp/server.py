@@ -647,8 +647,19 @@ class McpServer:
         return matter.as_dict()
 
     def _tool_verify_audit_chain(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool 6: verify_audit_chain(matter_id) → hash chain verification."""
+        """Tool 6: verify_audit_chain(matter_id) → hash chain verification.
+
+        V5.0: tenant_id from _auth prevents cross-tenant audit chain access.
+        """
         audit = self._audit_chain()
+        auth_meta = args.get("_auth", {})
+        tenant_id = auth_meta.get("tenant_id")
+        # V5.0: verify matter belongs to tenant before reading audit
+        if tenant_id:
+            store = self._store()
+            matter = store.get_matter(args["matter_id"], tenant_id=tenant_id)
+            if not matter:
+                return {"error": "Matter not found or not in tenant", "status": "DENIED"}
         return audit.verify_chain(args["matter_id"])
 
     def _tool_list_matters(self, args: dict[str, Any]) -> dict[str, Any]:
