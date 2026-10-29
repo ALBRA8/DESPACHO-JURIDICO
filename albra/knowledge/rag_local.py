@@ -7,7 +7,7 @@ V2.3+: migrar a bge-m3 + Qdrant si se quiere embeddings densos.
 Pipeline:
 1. index_document(document) → agrega al índice TF-IDF (1 chunk por artículo)
 2. search(query, k=5) → top-k chunks rankeados por cosine sim
-3. persist()/load() → guarda/carga índice en disco (pickle)
+3. persist()/load() → guarda/carga índice en disco (JSON)
 
 Corpus ya existe: albra/knowledge/colombia/corpus_pilot/real_corpus_v11.py
 - Constitución 1991 (6 arts), Ley 100/1993 (3 arts), Ley 80/1993 (3 arts) = 12 chunks
@@ -21,8 +21,8 @@ Stopwords: lista curada español + fallback inglés. Tokenizer regex
 """
 from __future__ import annotations
 
+import json
 import math
-import pickle
 import re
 from collections import Counter
 from pathlib import Path
@@ -292,7 +292,7 @@ class LocalRAG:
         }
 
     def persist(self, path: str | None = None) -> str:
-        """Persiste el índice a pickle. Returns ruta usada."""
+        """Persiste el índice a JSON. Returns ruta usada."""
         target = path or self.persist_path
         if not target:
             raise ValueError(
@@ -306,8 +306,8 @@ class LocalRAG:
             "tf": self._index.tf,
             "vocabulary": self._index.vocabulary,
         }
-        with open(target_path, "wb") as f:
-            pickle.dump(payload, f)
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, default=str)
         self.persist_path = str(target_path)
         self.log.info(
             "rag_local.persist",
@@ -317,15 +317,15 @@ class LocalRAG:
         return str(target_path)
 
     def load(self, path: str | None = None) -> bool:
-        """Carga índice desde pickle. Returns True si cargó, False si no."""
+        """Carga índice desde JSON. Returns True si cargó, False si no."""
         target = path or self.persist_path
         if not target:
             return False
         target_path = Path(target)
         if not target_path.exists():
             return False
-        with open(target_path, "rb") as f:
-            payload = pickle.load(f)  # noqa: S301 (trusted local cache)
+        with open(target_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)  # noqa: S301 (trusted local cache)
         self._index.documents = payload["documents"]
         self._index.df = payload["df"]
         self._index.tf = payload["tf"]

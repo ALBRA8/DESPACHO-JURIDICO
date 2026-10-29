@@ -83,6 +83,7 @@ class MatterStore:
             """
             CREATE TABLE IF NOT EXISTS matters (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
                 client TEXT NOT NULL,
                 area TEXT NOT NULL,
                 state TEXT NOT NULL,
@@ -93,6 +94,7 @@ class MatterStore:
                 deadlines_json TEXT NOT NULL DEFAULT '[]',
                 metadata_json TEXT NOT NULL DEFAULT '{}'
             );
+            CREATE INDEX IF NOT EXISTS idx_matters_tenant ON matters(tenant_id);
 
             CREATE TABLE IF NOT EXISTS parties (
                 id TEXT PRIMARY KEY,
@@ -136,6 +138,7 @@ class MatterStore:
         created_by: str = "cli",
         deadlines: list[dict[str, str]] | None = None,
         metadata: dict[str, Any] | None = None,
+        tenant_id: str = "default",
     ) -> Matter:
         matter = Matter(
             client=client,
@@ -148,12 +151,12 @@ class MatterStore:
         self._conn.execute(
             """
             INSERT INTO matters
-            (id, client, area, state, created_by, created_at, updated_at,
+            (id, tenant_id, client, area, state, created_by, created_at, updated_at,
              state_history_json, deadlines_json, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                matter.id, matter.client, matter.area, matter.state,
+                matter.id, tenant_id, matter.client, matter.area, matter.state,
                 matter.created_by, matter.created_at, matter.updated_at,
                 json.dumps(matter.state_history, ensure_ascii=False),
                 json.dumps(matter.deadlines, ensure_ascii=False),
@@ -202,10 +205,14 @@ class MatterStore:
         state: str | None = None,
         area: str | None = None,
         client: str | None = None,
+        tenant_id: str | None = None,
         limit: int = 100,
     ) -> list[Matter]:
         q = "SELECT id FROM matters WHERE 1=1"
         args: list[Any] = []
+        if tenant_id:
+            q += " AND tenant_id = ?"
+            args.append(tenant_id)
         if state:
             q += " AND state = ?"
             args.append(state)

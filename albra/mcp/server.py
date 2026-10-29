@@ -813,6 +813,34 @@ class McpServer:
             }
 
         # Execute tool handler
+        # V3.0 MEGA-A: Check for prompt injection in tool args before execution
+        # Deny if injection detected, but DO NOT sanitize (tools handle their own input)
+        try:
+            from albra.security.data_boundary import is_prompt_injection
+            is_injection, injection_reason = is_prompt_injection(str(args))
+            if is_injection:
+                self.log.warning("mcp.prompt_injection_detected", tool=name, reason=injection_reason)
+                entry = _make_audit_entry(
+                    timestamp=ts, request_id=auth_context.request_id, actor=auth_context.identity,
+                    role=auth_context.role, auth_method=auth_context.auth_method,
+                    tool_name=name, action="mcp.tool.call", authorization_result="DENIED",
+                    denial_reason=f"PROMPT INJECTION: {injection_reason}",
+                    input_hash=_hash_dict(args), output_hash="", matter_id="",
+                    correlation_id=auth_context.request_id,
+                    result_status="denied", error=injection_reason,
+                    latency_ms=(_time.time() - start) * 1000, environment=self._security_mode,
+                )
+                if self._mcp_audit is not None:
+                    self._mcp_audit.record(entry)
+                return {
+                    "error": f"PROMPT INJECTION DETECTED: {injection_reason}",
+                    "status": "DENIED",
+                    "authorization": "DENIED",
+                    "reason": injection_reason,
+                }
+        except ImportError:
+            pass  # data_boundary not available — continue without check
+
         try:
             result = self.tools[name]["handler"](args)
             latency = (_time.time() - start) * 1000
