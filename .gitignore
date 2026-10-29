@@ -57,3 +57,5 @@ logs/
 
 # Build artifacts
 *.spec
+scripts/v14_ingest/raw_cache/
+data/

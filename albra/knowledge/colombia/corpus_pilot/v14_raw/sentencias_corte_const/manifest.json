@@ -1,0 +1,52 @@
+[
+  {
+    "sentencia_id": "T-001-2020",
+    "description": "Tutela - salud - RUAF",
+    "url": "https://www.corteconstitucional.gov.co/relatoria/2020/T-001-20.htm",
+    "http_status": 200,
+    "raw_bytes_size": 163293,
+    "raw_bytes_hash": "2adec5e323d5821285c89cddaa88d38612a3f11d46fb646a556b5ec07b04dde3",
+    "retrieval_timestamp": "2026-10-29T10:52:43+00:00",
+    "cached_file": "T-001-2020.htm"
+  },
+  {
+    "sentencia_id": "T-002-2020",
+    "description": "Tutela - otro caso",
+    "url": "https://www.corteconstitucional.gov.co/relatoria/2020/T-002-20.htm",
+    "http_status": 200,
+    "raw_bytes_size": 354085,
+    "raw_bytes_hash": "a61431fe661ec8c28dfedfdaeb90699cbf73811466c8a1d7ea4534571f197be2",
+    "retrieval_timestamp": "2026-10-29T10:52:46+00:00",
+    "cached_file": "T-002-2020.htm"
+  },
+  {
+    "sentencia_id": "T-003-2020",
+    "description": "Tutela - otro caso",
+    "url": "https://www.corteconstitucional.gov.co/relatoria/2020/T-003-20.htm",
+    "http_status": 200,
+    "raw_bytes_size": 116401,
+    "raw_bytes_hash": "0c2fa8f1cb78e1119b20007ff1cb9b701e12c116939579467baeab8b373a1c11",
+    "retrieval_timestamp": "2026-10-29T10:52:48+00:00",
+    "cached_file": "T-003-2020.htm"
+  },
+  {
+    "sentencia_id": "T-100-2020",
+    "description": "Tutela - otro caso",
+    "url": "https://www.corteconstitucional.gov.co/relatoria/2020/T-100-20.htm",
+    "http_status": 200,
+    "raw_bytes_size": 229992,
+    "raw_bytes_hash": "6064a63722cbd7f252475a52583197d77c92403d35bb2904322e79a0eaa2df53",
+    "retrieval_timestamp": "2026-10-29T10:52:50+00:00",
+    "cached_file": "T-100-2020.htm"
+  },
+  {
+    "sentencia_id": "T-445-2020",
+    "description": "Tutela - debido proceso",
+    "url": "https://www.corteconstitucional.gov.co/relatoria/2020/T-445-20.htm",
+    "http_status": 200,
+    "raw_bytes_size": 296132,
+    "raw_bytes_hash": "053133d5911dcc37709913275996148bdf570d08f3e5c253b52f670fbf1c9047",
+    "retrieval_timestamp": "2026-10-29T10:52:53+00:00",
+    "cached_file": "T-445-2020.htm"
+  }
+]

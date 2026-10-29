@@ -1,0 +1,26 @@
+[
+  {
+    "page_filename": "ley_0640_2001.htm",
+    "page_index": 0,
+    "url": "http://www.secretariasenado.gov.co/senado/basedoc/ley_0640_2001.htm",
+    "http_status": 200,
+    "content_type": "text/html",
+    "raw_bytes_size": 81734,
+    "raw_bytes_hash": "438dbc2f25dac4c523e556fb33db447d62bfd9fc3b60c59fbe1a708d6fd90888",
+    "retrieval_timestamp": "2026-10-29T10:43:37+00:00",
+    "latency_ms": 1710.37,
+    "cached_at": "ley_0640_2001.htm"
+  },
+  {
+    "page_filename": "ley_0640_2001_pr001.html",
+    "page_index": 1,
+    "url": "http://www.secretariasenado.gov.co/senado/basedoc/ley_0640_2001_pr001.html",
+    "http_status": 200,
+    "content_type": "text/html",
+    "raw_bytes_size": 33051,
+    "raw_bytes_hash": "1f23b89fab38bce71fbc1f55de91a096f5bc7d13ae8c063bbcf72fc2f54597a6",
+    "retrieval_timestamp": "2026-10-29T10:43:38+00:00",
+    "latency_ms": 1329.87,
+    "cached_at": "ley_0640_2001_pr001.html"
+  }
+]
