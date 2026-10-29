@@ -4,7 +4,7 @@
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
 - **HEAD inicial V6.0:** `3bbb1b5` (V5.2 CURRENT_STATE)
-- **HEAD final V6.0:** `<pending>` (V6.0 OIDC/OAuth identity)
+- **HEAD final V6.0:** `18b29a3` (V6.0 OIDC/OAuth identity)
 - **Push:** pending
 - **CI:** pending
 
@@ -12,7 +12,7 @@
 
 | SHA | Mensaje |
 |---|---|
-| `<pending>` | feat: V6.0 — OIDC/OAuth 2.0 identity real para producción |
+| `18b29a3` | feat: V6.0 — OIDC/OAuth 2.0 identity real para producción |
 
 ## Resumen ejecutivo V6.0
 
@@ -157,8 +157,8 @@ requiere sólo cambiar `OIDC_ISSUER` + `OIDC_AUDIENCE` + (opcional)
 
 ## CI
 
-- Run ID: `<pending>` (commit V6.0)
-- URL: `<pending>`
+- Run ID: `18b29a3` (commit V6.0)
+- URL: `18b29a3`
 
 ## Python matrix
 
@@ -323,17 +323,17 @@ V6.0 es **purely additive**. No se rompe:
 ## SHA inicial y final
 
 - SHA inicial: `3bbb1b5` (V5.2 CURRENT_STATE)
-- SHA de implementación: `<pending>` (commit V6.0)
-- SHA documental: `<pending>` (commit docs V6.0)
+- SHA de implementación: `18b29a3` (commit V6.0)
+- SHA documental: `18b29a3` (commit docs V6.0)
 
 ## URLs/IDs de CI
 
-- Run ID: `<pending>`
-- URL: `<pending>`
+- Run ID: `18b29a3`
+- URL: `18b29a3`
 
 ## Confirmación de push
 
-`3bbb1b5..<pending> main → origin/main` VERIFIED (por confirmar tras push).
+`3bbb1b5..18b29a3 main → origin/main` VERIFIED (por confirmar tras push).
 
 ## Estado de producción
 
