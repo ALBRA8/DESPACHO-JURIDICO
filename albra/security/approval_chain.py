@@ -112,11 +112,19 @@ class ApprovalChain:
         action_type: str,
         description: str,
         payload: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> str:
         """El agente propone una acción. Crea pending_action con
         `minimum_human_signoff` default para el action_type.
 
         NO puede ejecutarse todavía. Solo queda PENDING.
+
+        V5.2: ``tenant_id`` is threaded to ``MatterStore.create_pending_action``.
+        Under ``enforce_tenant=True`` (production), this raises
+        ``TenantAuthorizationError`` if tenant_id is missing/placeholder,
+        and ``KeyError`` if the matter_id does not belong to the
+        authorized tenant. No partial pending action is ever persisted
+        on a cross-tenant matter.
         """
         signoffs = DEFAULT_SIGNOFF_BY_ACTION.get(action_type, 1)
         if signoffs < 1:
@@ -126,11 +134,13 @@ class ApprovalChain:
             action_type=action_type,
             description=description,
             minimum_human_signoff=signoffs,
+            tenant_id=tenant_id,
         )
         self.log.info(
             "approval.suggest",
             action_id=action_id, matter_id=matter_id,
             action_type=action_type, minimum_signoff=signoffs,
+            tenant_id=tenant_id,
         )
         return action_id
 
@@ -292,7 +302,35 @@ class ApprovalChain:
     # Aquí solo marcamos el status EXECUTED.)
 
     def mark_executed(self, action_id: str, *, by: str, tenant_id: str | None = None) -> dict[str, Any]:
-        """Marca la acción como EXECUTED. Llamar después de ejecutar el efecto real."""
+        """Marca la acción como EXECUTED. Llamar después de ejecutar el efecto real.
+
+        V5.2 audit: this method has a direct SQL ``UPDATE pending_actions``
+        write (lines below). The independent V5.2 audit required verifying
+        that no ApprovalChain method bypasses the store's tenant checks.
+
+        The direct SQL write is safe because it is preceded by two tenant
+        verifications:
+
+          1. ``self.store.get_pending_action(action_id, tenant_id=...)``
+             returns ``None`` if the action's matter does not belong to
+             the authorized tenant. We raise ``ApprovalChainError`` in
+             that case BEFORE the SQL write.
+          2. ``self.can_execute(action_id, tenant_id=...)`` re-verifies
+             the tenant via ``get_pending_action`` and returns ``False``
+             if the action is not found from the tenant's perspective.
+
+        By the time the direct SQL ``UPDATE pending_actions SET
+        status='EXECUTED' WHERE id=?`` runs, the ``action_id`` has been
+        verified to belong to the authorized tenant AND its status is
+        ``APPROVED``. The UPDATE is therefore scoped to a verified row.
+
+        No bypass exists. The direct SQL is left in place because
+        refactoring it into a new ``MatterStore.mark_action_executed``
+        method is out of scope for V5.2 (would be a feature, not a
+        security fix). A future refactor should consolidate the write
+        into the store layer for consistency with ``add_approval`` and
+        ``reject_action``.
+        """
         action = self.store.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise ApprovalChainError(f"Pending action not found: {action_id}")
@@ -301,7 +339,10 @@ class ApprovalChain:
             raise InsufficientSignoffsError(
                 f"Cannot execute action {action_id}: {reason}"
             )
-        # Marcar EXECUTED via update directo (no tenemos método en store todavía)
+        # V5.2 audit: action_id has been verified to belong to the
+        # authorized tenant (via get_pending_action + can_execute above).
+        # The direct SQL UPDATE below is therefore scoped to a verified
+        # row. See the method docstring for the full audit trail.
         self.store._conn.execute(
             "UPDATE pending_actions SET status = 'EXECUTED', decided_at = ?, decided_by = ? "
             "WHERE id = ?",

@@ -207,8 +207,29 @@ class MatterStore:
         created_by: str = "cli",
         deadlines: list[dict[str, str]] | None = None,
         metadata: dict[str, Any] | None = None,
-        tenant_id: str = "default",
+        tenant_id: str | None = None,
     ) -> Matter:
+        """Crea un matter nuevo (state=NUEVO).
+
+        V5.2 HARDENING: under ``enforce_tenant=True`` (production), the
+        ``tenant_id`` MUST be a non-empty, non-``"default"`` authorized
+        value resolved from an authenticated AuthContext. A missing,
+        empty, or placeholder tenant_id raises
+        :class:`TenantAuthorizationError` BEFORE any SQL write — no
+        partial matter is ever persisted with an unauthorized tenant.
+
+        When ``enforce_tenant=False`` (dev/test/CLI local mode), the
+        legacy behavior is preserved: a missing tenant_id defaults to
+        ``"default"``. This is the documented contract for local
+        development only — production callers MUST go through the MCP
+        HTTP layer which always supplies an authorized tenant_id.
+        """
+        tenant_id = self._require_tenant(tenant_id)
+        if not tenant_id:
+            # V5.2: dev/test/CLI local mode — preserve legacy "default"
+            # tenant placeholder. In production mode this branch is
+            # unreachable because _require_tenant already raised.
+            tenant_id = "default"
         matter = Matter(
             client=client,
             area=area,
@@ -240,7 +261,10 @@ class MatterStore:
                 (uuid.uuid4().hex, matter.id, name, "", matter.created_at),
             )
         self._conn.commit()
-        self.log.info("matter.create", matter_id=matter.id, client=client, area=area)
+        self.log.info(
+            "matter.create", matter_id=matter.id, client=client, area=area,
+            tenant_id=tenant_id,
+        )
         return matter
 
     def get_matter(self, matter_id: str, *, tenant_id: str | None = None) -> Matter | None:
@@ -366,7 +390,46 @@ class MatterStore:
         action_type: str,
         description: str = "",
         minimum_human_signoff: int = 1,
+        tenant_id: str | None = None,
     ) -> str:
+        """Crea una acción pendiente asociada a un matter.
+
+        V5.2 HARDENING: under ``enforce_tenant=True`` (production):
+          1. ``tenant_id`` MUST be a non-empty, non-``"default"`` authorized
+             value resolved from an authenticated AuthContext. Missing/
+             empty/placeholder raises :class:`TenantAuthorizationError`.
+          2. The ``matter_id`` MUST exist AND belong to the authorized
+             tenant. Cross-tenant creation (tenant-A creates a pending
+             action on tenant-B's matter_id) raises :class:`KeyError`.
+             The verification happens BEFORE any SQL write — no partial
+             row is ever persisted to ``pending_actions``.
+
+        This closes the gap identified in the V5.1 audit: previously
+        ``create_pending_action`` had no ``tenant_id`` parameter at all
+        and did not verify matter ownership. An attacker with a valid
+        ``matter_id`` from another tenant could pollute that tenant's
+        approval workflow with attacker-controlled pending actions.
+
+        When ``enforce_tenant=False`` (dev/test/CLI local mode), the
+        legacy behavior is preserved: no tenant check, no matter
+        ownership check. This is the documented contract for local
+        development only.
+        """
+        tenant_id = self._require_tenant(tenant_id)
+        # V5.2: verify matter exists and belongs to the authorized tenant
+        # BEFORE any write. This is the cross-tenant creation guard.
+        if self._enforce_tenant:
+            matter_check = self._conn.execute(
+                "SELECT 1 FROM matters WHERE id = ? AND tenant_id = ?",
+                (matter_id, tenant_id),
+            )
+            if not matter_check.fetchone():
+                # Do NOT reveal whether the matter exists in another
+                # tenant — that would leak cross-tenant information.
+                raise KeyError(
+                    f"Cannot create pending action: matter {matter_id!r} "
+                    f"is not in the authorized tenant"
+                )
         action_id = uuid.uuid4().hex
         now = _utcnow_iso()
         self._conn.execute(
@@ -382,6 +445,7 @@ class MatterStore:
         self.log.info(
             "pending.create", action_id=action_id, matter_id=matter_id,
             action_type=action_type, minimum_signoff=minimum_human_signoff,
+            tenant_id=tenant_id,
         )
         return action_id
 

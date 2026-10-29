@@ -283,12 +283,42 @@ def test_enforce_tenant_blocks_all_methods_when_tenant_id_missing(tmp_path):
             client="X", area="civil", created_by="ab1", tenant_id="tenant-A",
         )
         store.advance_state(m.id, "INTAKE", by="ab1", tenant_id="tenant-A")
+        # V5.2: create_pending_action now also enforces tenant_id under
+        # enforce_tenant=True. Pass tenant_id here so the setup itself
+        # succeeds; the negative cases below prove the guard fires when
+        # tenant_id is missing/placeholder.
         action_id = store.create_pending_action(
             matter_id=m.id, action_type="sign_document", description="x",
+            tenant_id="tenant-A",
         )
 
         # Each tuple: (callable, label). All must raise.
         cases = [
+            # V5.2: create_matter now also enforces tenant_id.
+            (lambda: store.create_matter(client="Y", area="civil"),
+             "create_matter (None)"),
+            (lambda: store.create_matter(client="Y", area="civil", tenant_id=None),
+             "create_matter (None explicit)"),
+            (lambda: store.create_matter(client="Y", area="civil", tenant_id=""),
+             "create_matter (empty)"),
+            (lambda: store.create_matter(client="Y", area="civil", tenant_id="default"),
+             "create_matter (default placeholder)"),
+            # V5.2: create_pending_action now also enforces tenant_id.
+            (lambda: store.create_pending_action(
+                matter_id=m.id, action_type="sign_document", description="x"),
+             "create_pending_action (None)"),
+            (lambda: store.create_pending_action(
+                matter_id=m.id, action_type="sign_document", description="x",
+                tenant_id=None),
+             "create_pending_action (None explicit)"),
+            (lambda: store.create_pending_action(
+                matter_id=m.id, action_type="sign_document", description="x",
+                tenant_id=""),
+             "create_pending_action (empty)"),
+            (lambda: store.create_pending_action(
+                matter_id=m.id, action_type="sign_document", description="x",
+                tenant_id="default"),
+             "create_pending_action (default placeholder)"),
             (lambda: store.get_matter(m.id), "get_matter (None)"),
             (lambda: store.get_matter(m.id, tenant_id=None), "get_matter (None explicit)"),
             (lambda: store.get_matter(m.id, tenant_id=""), "get_matter (empty)"),
@@ -326,6 +356,9 @@ def test_enforce_tenant_allows_authorized_tenant_id(tmp_path):
 
     V5.1: regression for legitimate same-tenant flows. The guard fires
     only for missing/placeholder tenant_id; authorized tenant_id passes.
+
+    V5.2: extended to cover create_matter and create_pending_action
+    (both now enforce tenant_id under enforce_tenant=True).
     """
     store = MatterStore(str(tmp_path / "matters.db"), enforce_tenant=True)
     try:
@@ -340,8 +373,12 @@ def test_enforce_tenant_allows_authorized_tenant_id(tmp_path):
         assert advanced.state == "INTAKE"
         listed = store.list_matters(tenant_id="tenant-A")
         assert len(listed) == 1
+        # V5.2: create_pending_action with authorized tenant_id works.
+        # The matter_id (m.id) belongs to tenant-A, so the cross-tenant
+        # guard verifies ownership and the action is created.
         action_id = store.create_pending_action(
             matter_id=m.id, action_type="sign_document", description="x",
+            tenant_id="tenant-A",
         )
         action = store.get_pending_action(action_id, tenant_id="tenant-A")
         assert action is not None
