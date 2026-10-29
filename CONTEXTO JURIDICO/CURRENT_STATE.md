@@ -1,21 +1,147 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V5.1 CIERRE FINAL DE SEGURIDAD MULTITENANT`
+- **Estado del documento:** `V5.1.1 CIERRE FINAL DEL GUARD DE CLI (FAIL-CLOSED)`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
-- **HEAD inicial V5.1:** `caeee65` (V5.0 CURRENT_STATE)
-- **HEAD final V5.1:** `cd036d1` (V5.1 cierre final multitenant)
-- **Push:** VERIFIED (caeee65..cd036d1 main)
-- **CI:** Run `40818254608`, commit `cd036d1`, SUCCESS
+- **HEAD inicial V5.1.1:** `c492a5d` (V5.1 CURRENT_STATE)
+- **HEAD final V5.1.1:** `19d045f` (V5.1.1 CLI guard fail-closed)
+- **Push:** VERIFIED (c492a5d..19d045f main)
+- **CI:** Run `40820289266`, commit `19d045f`, SUCCESS
   - lint: SUCCESS
-  - test 3.10/3.11/3.12: 1302 passed, 5 skipped
+  - test 3.10/3.11/3.12: 1317 passed, 5 skipped
   - clean-room: SUCCESS
 
-## Commits V5.1
+## Commits V5.1.1
 
 | SHA | Mensaje |
 |---|---|
-| `cd036d1` | fix: V5.1 — cierre final de seguridad multitenant |
+| `19d045f` | fix: V5.1.1 — CLI guard fail-closed cuando Settings no carga |
+
+## Resumen ejecutivo V5.1.1
+
+V5.1.1 es una corrección acotada del guard de CLI en `albra/cli.py`.
+**No se añaden funcionalidades jurídicas nuevas.** Sólo se cierra el
+path fail-OPEN identificado en la auditoría independiente de V5.1.
+
+El defecto V5.1: `_enforce_local_only()` tenía:
+
+```python
+try:
+    from albra.config.settings import Settings
+    settings = Settings()
+except Exception:  # noqa: BLE001
+    return  # ← FAIL-OPEN: el comando continúa sin check de entorno
+```
+
+Si `Settings()` raisaba por cualquier motivo (corrupted env, missing
+module, circular import, futura validación eager, OOM, etc.), el guard
+silenciosamente dejaba continuar el comando — sin check de
+ALBRA_ENVIRONMENT, sin ALBRA_CLI_ALLOW_LOCAL, sin nada. Un atacante
+que pudiera manipular environment variables o sys.path para hacer
+`Settings()` raise podía bypassear el CLI guard entero y alcanzar el
+MatterStore producción.
+
+V5.1.1 reemplaza el `except: return` por `except: click.echo(REFUSED...);
+sys.exit(2)` — el comando se rehúsa, NO toca el DB file, y el mensaje
+nombra el tipo y mensaje de la excepción para que el operador pueda
+diagnosticar la causa raíz.
+
+## Comportamiento del guard V5.1.1
+
+| Escenario | V5.1 (fail-open) | V5.1.1 (fail-closed) |
+|---|---|---|
+| Settings carga + dev | command runs | command runs (sin cambio) |
+| Settings carga + prod sin escape hatch | refused exit 2 | refused exit 2 (sin cambio) |
+| Settings carga + prod con escape hatch | command runs | command runs (sin cambio) |
+| **Settings falla (cualquier excepción)** | **command runs (FAIL-OPEN)** | **refused exit 2 + DB no tocado** |
+| Settings falla + ALBRA_CLI_ALLOW_LOCAL=1 | command runs (FAIL-OPEN) | refused exit 2 (escape hatch NO extendido) |
+
+El path de producción/dev cuando Settings carga correctamente es
+**byte-identical** entre V5.1 y V5.1.1 (verificado por diff).
+
+## Archivos modificados V5.1.1
+
+| Archivo | Líneas | Cambios |
+|---|---|---|
+| `albra/cli.py` | +65/-17 | `_enforce_local_only()` fail-closed path; docstring actualizado; comentario explicando V5.1.1 |
+| `tests/matters/test_v51_1_cli_guard_fail_closed.py` | new, 421 líneas | 15 tests funcionales con CliRunner |
+
+Sin modificaciones a otros archivos. Sin debilitamiento de controles
+existentes. Sin tocar pruebas ajenas al objetivo.
+
+## Pruebas funcionales V5.1.1 (15 tests, todas con CliRunner real)
+
+1. `test_cli_matter_show_refused_when_settings_load_fails`: invoca
+   `albra matter show` con Settings patched para raise. Aserta
+   exit_code=2, "REFUSED" + "configuration could not be loaded",
+   DB file NO creado.
+2. `test_cli_matter_advance_refused_when_settings_load_fails`
+3. `test_cli_pending_approve_refused_when_settings_load_fails`
+4. `test_cli_matter_new_refused_when_settings_load_fails`
+5. `test_cli_pending_list_refused_when_settings_load_fails`
+6. `test_cli_settings_failure_does_not_leak_data`: siembra DB con 2
+   tenants (SECRET_CLIENT_A, SECRET_CLIENT_B), rompe Settings, y
+   aserta que el mensaje de rechazo NO menciona ningún client name
+   ni tenant ID. El DB queda con exactamente 2 matters (sin mutación).
+7. `test_cli_settings_failure_not_overridden_by_escape_hatch`: set
+   ALBRA_CLI_ALLOW_LOCAL=1 + ALBRA_ENVIRONMENT=production + Settings
+   roto → aún así se rehúsa (punto 4 del brief: "sin ampliarla ni
+   activarla automáticamente").
+8. `test_cli_dev_mode_still_runs_when_settings_loads`: regression
+   (dev mode → command runs, exit 1 = not found, no 2 = refused).
+9. `test_cli_production_mode_still_refused_when_settings_loads`:
+   regression (prod → refuse exit 2, mensaje distinguible del path
+   Settings-failure).
+10. `test_cli_production_escape_hatch_still_works_when_settings_loads`:
+    regression (escape hatch en prod cuando Settings carga).
+11. `test_cli_settings_failure_fail_closed_for_any_exception` (5 cases
+    parametrized: RuntimeError, ImportError, ValueError, TypeError,
+    KeyError) — verifica que el guard no discrimina por tipo de
+    excepción: cualquier fallo al determinar el entorno → refuse.
+
+## Conteos
+
+| Métrica | V5.1 (baseline) | V5.1.1 |
+|---|---|---|
+| Tests passed | 1302 | **1317** |
+| Tests skipped | 5 | **5** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+15** |
+| Lint | ruff All checks passed | ruff All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## Confirmación
+
+| Punto del brief V5.1.1 | Estado |
+|---|---|
+| 1. Eliminar fail-open cuando Settings falla | VERIFIED (15 tests) |
+| 2. Rechazar antes de acceder al almacén | VERIFIED (DB file no creado en 5 tests) |
+| 3. Mantener behavior dev/prod cuando Settings carga | VERIFIED (3 regression tests + diff byte-identical) |
+| 4. ALBRA_CLI_ALLOW_LOCAL=1 sin ampliar ni auto-activar | VERIFIED (escape hatch NO extendido al path Settings-failure) |
+| 5. Pruebas funcionales con CliRunner | VERIFIED (15 tests, todos con CliRunner) |
+| 6. Suite completa + Ruff + matrix 3.10/3.11/3.12 + clean-room | VERIFIED (CI run 40820289266 SUCCESS) |
+| 7. Diff sin debilitar controles ni tocar pruebas ajenas | VERIFIED (2 archivos, +486/-17 líneas, sólo cli.py y nuevo test file) |
+| 8. CURRENT_STATE.md actualizado | VERIFIED (este documento) |
+
+## Limitaciones externas pendientes
+
+| Componente | Razón |
+|---|---|
+| MCP OAuth production | Requiere provider OAuth real (Auth0/Keycloak/GitHub OAuth App) |
+| LLM Anthropic/OpenAI | Requiere API keys válidas |
+| USDC settlement | Requiere wallet + smart contract |
+| Deployment | Requiere infraestructura + secrets operativos |
+
+Ninguno es código ALBRA — todos son dependencias externas.
+
+---
+
+# Histórico: V5.1 (cierre final multitenant)
+
+- **HEAD inicial V5.1:** `caeee65` (V5.0 CURRENT_STATE)
+- **HEAD final V5.1:** `cd036d1` (V5.1 cierre final multitenant)
+- **CI:** Run `40818254608`, commit `cd036d1`, SUCCESS
 
 ## Resumen ejecutivo
 
