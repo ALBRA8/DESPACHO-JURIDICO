@@ -487,6 +487,12 @@ class LawyerExam:
 
         V7.0: la estrategia la formula el LLM real, pero el guardián
         rechaza caer a Mock. Si el LLM falla, el caso queda BLOQUEADO.
+
+        V8.0 Fase 2: antes de formular la estrategia, ejecutar
+        AdversarialValidator sobre las citas verificadas. Si hay
+        defectos blocking (norma derogada, contradicción no resuelta),
+        el caso queda BLOQUEADO — no se formula estrategia sobre
+        fundamentos defectuosos.
         """
         verified = self.result.citations_verified
         if not verified:
@@ -495,6 +501,48 @@ class LawyerExam:
                 status="ABSTAINED",
             )
             return
+
+        # V8.0 Fase 2: Adversarial validation of citations BEFORE strategy.
+        try:
+            from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import (
+                ALL_DOCUMENTS_V14,
+            )
+            from albra.lawyer.adversarial_validation import AdversarialValidator
+            validator = AdversarialValidator()
+            validation = validator.validate(
+                citations=verified,
+                corpus=ALL_DOCUMENTS_V14,
+                affected_element="strategy",
+            )
+            if not validation.ok:
+                blocking_defects = [
+                    d for d in validation.defects if d.severity == "blocking"
+                ]
+                step = ExamStep(
+                    step_number=7,
+                    name="Estrategia razonada",
+                    status="blocked",
+                    summary=(
+                        f"Validación adversarial BLOQUEÓ la estrategia: "
+                        f"{len(blocking_defects)} defecto(s) blocking."
+                    ),
+                    evidence=[
+                        {"type": "validation_defects", "items": [d.as_dict() for d in blocking_defects]},
+                    ],
+                )
+                self._record_step(step)
+                self._abort(
+                    f"Estrategia bloqueada por validación adversarial: "
+                    f"{'; '.join(d.detail for d in blocking_defects)}. "
+                    "El caso no puede declararse SUCCESS con fundamentos defectuosos.",
+                    status="BLOCKED",
+                )
+                return
+        except ImportError:
+            # AdversarialValidator not available — continue without it
+            # (preserves V7.0 behavior if the module is missing).
+            pass
+
         # Build the LLM prompt with the verified article texts.
         article_texts = "\n\n".join(
             f"[{v['document']} art. {v['article']}]\n{v['article_text_preview']}"
@@ -709,6 +757,35 @@ class LawyerExam:
         )
         self._review_text = response.text
         self._record_step(step)
+
+        # V8.0 Fase 2: post-review adversarial validation.
+        # After the LLM review, run the AdversarialValidator again on
+        # the citations used in the draft. If new blocking defects
+        # appear (e.g. the draft cited a derogated norm not in the
+        # original verified list), block the case.
+        try:
+            from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import (
+                ALL_DOCUMENTS_V14,
+            )
+            from albra.lawyer.adversarial_validation import AdversarialValidator
+            validator = AdversarialValidator()
+            post_validation = validator.validate(
+                citations=self.result.citations_verified,
+                corpus=ALL_DOCUMENTS_V14,
+                affected_element="review",
+            )
+            if not post_validation.ok:
+                blocking = [d for d in post_validation.defects if d.severity == "blocking"]
+                if blocking:
+                    self._abort(
+                        f"Revisión interna bloqueada por validación adversarial post-revisión: "
+                        f"{'; '.join(d.detail for d in blocking)}. "
+                        "El caso no puede declararse SUCCESS con defectos blocking.",
+                        status="BLOCKED",
+                    )
+                    return
+        except ImportError:
+            pass  # preserves V7.0 behavior
 
     # ----- Step 12: Deliver -----
 
