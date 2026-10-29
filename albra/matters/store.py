@@ -64,15 +64,84 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-class MatterStore:
-    """Persistencia de matters en SQLite WAL."""
+class TenantAuthorizationError(RuntimeError):
+    """Raised when a tenant-aware operation is invoked without an authorized tenant_id.
 
-    def __init__(self, db_path: str = "./data/matters.db") -> None:
+    V5.1 HARDENING: in production deployments, MatterStore is constructed with
+    `enforce_tenant=True`. Under that mode, every tenant-aware operation
+    (get_matter, advance_state, list_matters, get_pending_action, list_pending,
+    add_approval, reject_action) requires a non-empty, authorized tenant_id.
+
+    A missing, empty, or None tenant_id must NEVER degenerate into an
+    unfiltered query. This is the explicit opposite of `if tenant_id:` —
+    we fail closed instead of dropping the filter.
+
+    The tenant_id must come from an authenticated AuthContext (validated by
+    the MCP security layer in production). A client cannot supply tenant_id
+    directly in production: the security layer rejects such attempts before
+    reaching MatterStore.
+    """
+
+
+def _tenant_is_authorized(tenant_id: str | None) -> bool:
+    """Return True iff tenant_id is a non-empty, non-default string.
+
+    "default" is the AuthContext placeholder used when no tenant was provided
+    at authentication time. In production we treat it as 'not authorized'
+    because real tenants must be resolved from real authentication, never
+    inherited from a placeholder.
+    """
+    return bool(tenant_id) and tenant_id != "default"
+
+
+class MatterStore:
+    """Persistencia de matters en SQLite WAL.
+
+    V5.1: ``enforce_tenant`` (default ``False``) is the production hardening
+    switch. When ``True``, all tenant-aware operations require a non-empty,
+    non-placeholder ``tenant_id`` (anything other than ``None`` / ``""`` /
+    ``"default"``) and raise :class:`TenantAuthorizationError` otherwise.
+
+    The flag is opt-in so that:
+      * Local development / CLI / tests can call MatterStore without a
+        tenant (legacy behavior).
+      * Production McpServer constructs its MatterStore with
+        ``enforce_tenant=True`` so that an AuthContext with an empty
+        tenant_id cannot degenerate into a tenant-unfiltered query.
+    """
+
+    def __init__(
+        self,
+        db_path: str = "./data/matters.db",
+        *,
+        enforce_tenant: bool = False,
+    ) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = get_logger("albra.matters.store")
+        self._enforce_tenant = enforce_tenant
         self._conn: sqlite3.Connection | None = None
         self._init_db()
+
+    def _require_tenant(self, tenant_id: str | None) -> str:
+        """V5.1: enforce tenant authorization when ``enforce_tenant=True``.
+
+        Returns the validated tenant_id on success. Raises
+        :class:`TenantAuthorizationError` if the tenant_id is missing, empty,
+        or the ``"default"`` placeholder used by AuthContext when no tenant
+        was resolved at authentication time.
+
+        When ``enforce_tenant=False`` (dev/test/CLI local mode), this method
+        is a no-op pass-through that returns the input unchanged.
+        """
+        if self._enforce_tenant and not _tenant_is_authorized(tenant_id):
+            raise TenantAuthorizationError(
+                "Tenant authorization required: tenant_id is missing, empty, "
+                "or the 'default' placeholder. In production, tenant_id must "
+                "be resolved from a validated AuthContext (bearer token → "
+                "AuthContext.tenant_id), never from client-supplied args."
+            )
+        return tenant_id or ""
 
     def _init_db(self) -> None:
         # WAL mode: lectores no bloquean escritor
@@ -179,7 +248,14 @@ class MatterStore:
 
         V4.1: tenant_id check prevents cross-tenant access by ID.
         A valid matter_id from another tenant returns None (not found).
+
+        V5.1: under ``enforce_tenant=True`` (production), ``tenant_id`` is
+        MANDATORY. A missing, empty, or ``"default"`` tenant_id raises
+        :class:`TenantAuthorizationError` instead of silently executing a
+        tenant-unfiltered query. This is the fail-closed counterpart to the
+        previous ``if tenant_id:`` truthy guard.
         """
+        tenant_id = self._require_tenant(tenant_id)
         if tenant_id:
             cur = self._conn.execute(
                 "SELECT id FROM matters WHERE id = ? AND tenant_id = ?",
@@ -220,6 +296,8 @@ class MatterStore:
         tenant_id: str | None = None,
         limit: int = 100,
     ) -> list[Matter]:
+        """V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id."""
+        tenant_id = self._require_tenant(tenant_id)
         q = "SELECT id FROM matters WHERE 1=1"
         args: list[Any] = []
         if tenant_id:
@@ -252,7 +330,12 @@ class MatterStore:
 
         V4.1: tenant_id check prevents cross-tenant advance by ID.
         Raises KeyError if matter not found OR not in tenant.
+
+        V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id.
         """
+        # V5.1: explicit guard BEFORE the get_matter call so that the
+        # tenant_id placeholder check happens at the boundary, not after.
+        tenant_id = self._require_tenant(tenant_id)
         matter = self.get_matter(matter_id, tenant_id=tenant_id)
         if not matter:
             raise KeyError(f"Matter not found: {matter_id}")
@@ -306,7 +389,10 @@ class MatterStore:
         """Retrieves a pending action by ID. If tenant_id provided, verifies matter ownership.
 
         V4.1: tenant_id check prevents cross-tenant access to pending actions.
+
+        V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id.
         """
+        tenant_id = self._require_tenant(tenant_id)
         cur = self._conn.execute(
             "SELECT id, matter_id, action_type, description, minimum_human_signoff, "
             "approvals_json, status, created_at, decided_at, decided_by "
@@ -336,7 +422,10 @@ class MatterStore:
         """Lists pending actions. If tenant_id provided, only returns actions for matters in that tenant.
 
         V4.1: tenant_id filter prevents cross-tenant enumeration of pending actions.
+
+        V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id.
         """
+        tenant_id = self._require_tenant(tenant_id)
         if tenant_id:
             q = ("SELECT pa.id FROM pending_actions pa "
                  "JOIN matters m ON pa.matter_id = m.id "
@@ -369,7 +458,14 @@ class MatterStore:
         """Añade una firma a la acción pendiente.
 
         V4.1: tenant_id check prevents cross-tenant approval.
+
+        V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id.
         """
+        # V5.1: explicit guard before get_pending_action. Note that we use
+        # _require_tenant directly (not get_pending_action's internal check)
+        # so the error message is consistent and the call does not leak
+        # whether the action exists.
+        tenant_id = self._require_tenant(tenant_id)
         action = self.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise KeyError(f"Pending action not found: {action_id}")
@@ -403,7 +499,12 @@ class MatterStore:
             approved_count=len(approvals), needed=signoffs_needed,
             now_approved=now_approved,
         )
-        updated = self.get_pending_action(action_id)
+        # V5.1: thread tenant_id to the read-back so that enforce_tenant
+        # mode does not raise on the final get_pending_action. Without
+        # this fix, the approval would succeed but the function would
+        # raise TenantAuthorizationError on the read-back, leaving the
+        # caller with an inconsistent view.
+        updated = self.get_pending_action(action_id, tenant_id=tenant_id)
         return updated or action
 
     def reject_action(
@@ -415,7 +516,11 @@ class MatterStore:
         comment: str = "",
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        """V4.1: tenant_id check prevents cross-tenant rejection."""
+        """V4.1: tenant_id check prevents cross-tenant rejection.
+
+        V5.1: ``enforce_tenant=True`` requires non-empty authorized tenant_id.
+        """
+        tenant_id = self._require_tenant(tenant_id)
         action = self.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise KeyError(f"Pending action not found: {action_id}")
@@ -431,7 +536,8 @@ class MatterStore:
         self.log.info(
             "pending.reject", action_id=action_id, by=by, role=role, comment=comment
         )
-        return self.get_pending_action(action_id) or action
+        # V5.1: same as add_approval — thread tenant_id to read-back.
+        return self.get_pending_action(action_id, tenant_id=tenant_id) or action
 
     def close(self) -> None:
         if self._conn:

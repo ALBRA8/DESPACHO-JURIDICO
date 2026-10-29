@@ -18,6 +18,7 @@ from typing import Any
 
 from albra.config.settings import Settings
 from albra.evidence.legal_gate import LegalGate
+from albra.matters.store import _tenant_is_authorized
 from albra.mcp.protocol import MCPCapability, MCPRequest, MCPResponse
 from albra.mcp.security import (
     AuthContext,
@@ -337,8 +338,25 @@ class McpServer:
 
     def _store(self) -> Any:
         if self._matter_store is None:
+            # V5.1: when McpServer runs in production security mode, the
+            # lazily-constructed MatterStore must enforce tenant authorization
+            # for every tenant-aware operation. This closes the silent
+            # fail-open path where a missing/empty tenant_id from AuthContext
+            # would degenerate into a tenant-unfiltered query.
+            #
+            # V5.1 also fixes a separate latent bug: the lazy default
+            # MatterStore was constructed with the hardcoded default
+            # ``./data/matters.db`` instead of ``Settings.matter_db_path``,
+            # silently ignoring the configured DB path. We now resolve the
+            # path via Settings() so production deployments respect the
+            # ALBRA_MATTER_DB_PATH environment variable.
+            from albra.config.settings import get_settings
             from albra.matters.store import MatterStore
-            self._matter_store = MatterStore()
+            settings = get_settings()
+            self._matter_store = MatterStore(
+                settings.matter_db_path,
+                enforce_tenant=(self._security_mode == "production"),
+            )
         return self._matter_store
 
     def _audit_chain(self) -> Any:
@@ -633,10 +651,26 @@ class McpServer:
         """Tool 5: advance_matter(matter_id, target_state, by, reason).
 
         V4.1: tenant_id from _auth prevents cross-tenant advance by ID.
+
+        V5.1: in production mode, fail-closed if the resolved tenant_id is
+        missing, empty, or the ``"default"`` AuthContext placeholder. The
+        tenant_id is taken ONLY from the AuthContext injected by call_tool
+        (never from client args).
         """
         store = self._store()
         auth_meta = args.get("_auth", {})
         tenant_id = auth_meta.get("tenant_id")
+        if self._security_mode == "production" and not _tenant_is_authorized(tenant_id):
+            return {
+                "error": (
+                    "FAIL-CLOSED: tenant_id required to advance matter "
+                    "(production mode). AuthContext did not provide an "
+                    "authorized tenant_id."
+                ),
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": "Missing or placeholder tenant_id in production",
+            }
         matter = store.advance_state(
             args["matter_id"],
             args["target_state"],
@@ -650,16 +684,32 @@ class McpServer:
         """Tool 6: verify_audit_chain(matter_id) → hash chain verification.
 
         V5.0: tenant_id from _auth prevents cross-tenant audit chain access.
+
+        V5.1: in production mode, fail-closed if tenant_id is missing/empty/
+        ``"default"``. Previously the check was ``if tenant_id:`` which meant
+        a missing tenant_id would skip the cross-tenant guard entirely and
+        read any matter's audit chain by ID. Now the tool refuses to read
+        the chain unless a valid tenant_id was provided by AuthContext.
         """
         audit = self._audit_chain()
         auth_meta = args.get("_auth", {})
         tenant_id = auth_meta.get("tenant_id")
+        if self._security_mode == "production" and not _tenant_is_authorized(tenant_id):
+            return {
+                "error": (
+                    "FAIL-CLOSED: tenant_id required to verify audit chain "
+                    "(production mode). AuthContext did not provide an "
+                    "authorized tenant_id."
+                ),
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": "Missing or placeholder tenant_id in production",
+            }
         # V5.0: verify matter belongs to tenant before reading audit
-        if tenant_id:
-            store = self._store()
-            matter = store.get_matter(args["matter_id"], tenant_id=tenant_id)
-            if not matter:
-                return {"error": "Matter not found or not in tenant", "status": "DENIED"}
+        store = self._store()
+        matter = store.get_matter(args["matter_id"], tenant_id=tenant_id or None)
+        if not matter:
+            return {"error": "Matter not found or not in tenant", "status": "DENIED"}
         return audit.verify_chain(args["matter_id"])
 
     def _tool_list_matters(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -667,10 +717,28 @@ class McpServer:
 
         V4.0: tenant_id derived from _auth (injected by call_tool),
         NOT from client args. Prevents cross-tenant data leak.
+
+        V5.1: in production mode, fail-closed if tenant_id is missing/empty/
+        ``"default"``. Previously the code silently fell back to the
+        ``"default"`` tenant placeholder, which would either return an
+        empty list or, in a deployment that happens to use ``"default"``
+        as a real tenant, leak that tenant's data to any caller. Both
+        behaviors are unsafe. Production now DENIES the call.
         """
         store = self._store()
         auth_meta = args.get("_auth", {})
-        tenant_id = auth_meta.get("tenant_id", "default")
+        tenant_id = auth_meta.get("tenant_id")
+        if self._security_mode == "production" and not _tenant_is_authorized(tenant_id):
+            return {
+                "error": (
+                    "FAIL-CLOSED: tenant_id required to list matters "
+                    "(production mode). AuthContext did not provide an "
+                    "authorized tenant_id."
+                ),
+                "status": "DENIED",
+                "authorization": "DENIED",
+                "reason": "Missing or placeholder tenant_id in production",
+            }
         kwargs: dict[str, Any] = {"tenant_id": tenant_id}
         if args.get("state"):
             kwargs["state"] = args["state"]

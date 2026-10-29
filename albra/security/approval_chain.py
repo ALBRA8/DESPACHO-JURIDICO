@@ -149,6 +149,7 @@ class ApprovalChain:
         by: str,
         role: str,
         comment: str = "",
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """El abogado firma. Si es la última firma requerida, el status pasa a APPROVED.
 
@@ -156,8 +157,13 @@ class ApprovalChain:
         - Solo roles TÉCNICOS (abogado, socio) pueden firmar acciones técnicas.
         - El rol cliente puede firmar contratos (accept_contract).
         - No se puede firmar una acción ya decidida (APPROVED/REJECTED/EXECUTED).
+
+        V5.1: ``tenant_id`` is threaded through to ``MatterStore`` so that
+        cross-tenant approve is blocked at the storage layer. The CLI's
+        production guard prevents unauthorized callers from reaching this
+        path in production; the tenant_id parameter is defense-in-depth.
         """
-        action = self.store.get_pending_action(action_id)
+        action = self.store.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise ApprovalChainError(f"Pending action not found: {action_id}")
         if action["status"] != "PENDING":
@@ -206,7 +212,7 @@ class ApprovalChain:
 
         # Delegar al store para añadir la firma
         updated = self.store.add_approval(
-            action_id, by=by, role=role, comment=comment
+            action_id, by=by, role=role, comment=comment, tenant_id=tenant_id,
         )
         self.log.info(
             "approval.approve",
@@ -226,26 +232,44 @@ class ApprovalChain:
         by: str,
         role: str,
         comment: str = "",
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """El abogado rechaza la acción propuesta. Status pasa a REJECTED.
 
         Cualquier rol técnico puede rechazar (paralegal no).
+
+        V5.1: ``tenant_id`` is threaded to the store to block cross-tenant
+        rejects. The store raises KeyError on cross-tenant access (so we
+        don't leak whether the action exists); we wrap it as
+        ApprovalChainError for API consistency with approve().
         """
         if role not in TECHNICAL_ROLES:
             raise UnauthorizedRoleError(
                 f"Reject requires technical role. Got: {role!r}"
             )
-        return self.store.reject_action(action_id, by=by, role=role, comment=comment)
+        try:
+            return self.store.reject_action(
+                action_id, by=by, role=role, comment=comment, tenant_id=tenant_id,
+            )
+        except KeyError as e:
+            # V5.1: wrap as ApprovalChainError for API consistency with approve().
+            # The store's KeyError is implementation detail; the public API
+            # surface of ApprovalChain must be uniform.
+            raise ApprovalChainError(str(e)) from e
 
     # ===== Paso 4: Execute =====
 
-    def can_execute(self, action_id: str) -> tuple[bool, str]:
+    def can_execute(self, action_id: str, *, tenant_id: str | None = None) -> tuple[bool, str]:
         """Verifica si la acción puede ejecutarse.
 
         Returns:
             (can_execute, reason) — reason explica por qué no si can_execute=False.
+
+        V5.1: ``tenant_id`` is threaded to ``get_pending_action`` so that
+        cross-tenant ``can_execute`` checks return False (action not found
+        from the perspective of the requesting tenant).
         """
-        action = self.store.get_pending_action(action_id)
+        action = self.store.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             return False, f"Action {action_id} not found"
         if action["status"] == "REJECTED":
@@ -267,12 +291,12 @@ class ApprovalChain:
     # (La persistencia en audit log la hace MatterAudit en Etapa 5.
     # Aquí solo marcamos el status EXECUTED.)
 
-    def mark_executed(self, action_id: str, *, by: str) -> dict[str, Any]:
+    def mark_executed(self, action_id: str, *, by: str, tenant_id: str | None = None) -> dict[str, Any]:
         """Marca la acción como EXECUTED. Llamar después de ejecutar el efecto real."""
-        action = self.store.get_pending_action(action_id)
+        action = self.store.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise ApprovalChainError(f"Pending action not found: {action_id}")
-        can_exec, reason = self.can_execute(action_id)
+        can_exec, reason = self.can_execute(action_id, tenant_id=tenant_id)
         if not can_exec:
             raise InsufficientSignoffsError(
                 f"Cannot execute action {action_id}: {reason}"
@@ -285,15 +309,15 @@ class ApprovalChain:
         )
         self.store._conn.commit()
         self.log.info("approval.executed", action_id=action_id, by=by)
-        return self.store.get_pending_action(action_id) or action
+        return self.store.get_pending_action(action_id, tenant_id=tenant_id) or action
 
     # ===== Inspección =====
 
-    def list_pending_for_matter(self, matter_id: str) -> list[dict[str, Any]]:
-        return self.store.list_pending(matter_id=matter_id)
+    def list_pending_for_matter(self, matter_id: str, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        return self.store.list_pending(matter_id=matter_id, tenant_id=tenant_id)
 
-    def list_all_pending(self) -> list[dict[str, Any]]:
-        return self.store.list_pending()
+    def list_all_pending(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        return self.store.list_pending(tenant_id=tenant_id)
 
-    def get_status(self, action_id: str) -> dict[str, Any] | None:
-        return self.store.get_pending_action(action_id)
+    def get_status(self, action_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+        return self.store.get_pending_action(action_id, tenant_id=tenant_id)

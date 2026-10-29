@@ -3,11 +3,63 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import click
 
 from albra.identity.manifest import AGENT_MANIFEST
+
+
+# ===== V5.1: CLI local-only guard =====
+# The CLI commands that read or modify matter/pending-action data call
+# MatterStore directly, without going through McpServer.call_tool. That
+# means they bypass AuthContext propagation and tenant_id enforcement.
+#
+# For local development this is fine and is the documented contract. For
+# production deployments it is NOT acceptable: a CLI command run on the
+# host where ALBRA_ENVIRONMENT=production must never touch the production
+# MatterStore without an explicit, auditable override.
+#
+# The guard works as follows:
+#   * If ALBRA_ENVIRONMENT=production AND ALBRA_CLI_ALLOW_LOCAL != "1":
+#       The data-touching command refuses to run and prints a clear error.
+#   * ALBRA_CLI_ALLOW_LOCAL=1 is the explicit escape hatch. Setting it
+#     requires an operator with shell access to the production host, and
+#     its use should be audited via external logging (e.g. ssh session
+#     recording, sudo logs).
+#
+# Commands that do NOT touch tenant data (info, agent list, research) are
+# not guarded. They are read-only on tenant-agnostic shared resources
+# (manifest, organigrama, citation corpus).
+def _enforce_local_only(command_name: str) -> None:
+    """Refuse to run data-touching CLI commands under production settings.
+
+    V5.1 HARDENING: closes the CLI bypass identified in V5.0.
+    Previously the CLI was *documented* as LOCAL_ONLY but the code did
+    nothing to enforce it. Now it does.
+    """
+    try:
+        from albra.config.settings import Settings
+        settings = Settings()
+    except Exception:  # noqa: BLE001
+        # If Settings itself fails (e.g. insecure secrets), let the
+        # command itself surface the error. The guard is a safety net,
+        # not a substitute for proper configuration.
+        return
+    if not settings.is_production():
+        return
+    if os.environ.get("ALBRA_CLI_ALLOW_LOCAL") == "1":
+        return
+    click.echo(
+        f"REFUSED: '{command_name}' is a local-only command and cannot run "
+        f"in production (ALBRA_ENVIRONMENT=production). Production data "
+        f"access must go through the MCP HTTP API with bearer-token "
+        f"authentication. To override, set ALBRA_CLI_ALLOW_LOCAL=1 (this "
+        f"should be audited and only used for emergency recovery).",
+        err=True,
+    )
+    sys.exit(2)
 
 
 @click.group()
@@ -261,6 +313,7 @@ def matter() -> None:
 @click.option("--created-by", default="cli", help="Usuario que crea")
 def matter_new(client, area, parties, created_by):
     """Crea un matter nuevo (state=NUEVO)."""
+    _enforce_local_only("matter new")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     from albra.matters.timeline import MatterTimeline
@@ -287,6 +340,7 @@ def matter_new(client, area, parties, created_by):
 @click.option("--client", default=None, help="Filtrar por cliente (substring)")
 def matter_list(status, area, client):
     """Lista matters (filtros opcionales)."""
+    _enforce_local_only("matter list")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     s = Settings()
@@ -307,6 +361,7 @@ def matter_list(status, area, client):
 @click.argument("matter_id")
 def matter_show(matter_id):
     """Muestra detalle de un matter."""
+    _enforce_local_only("matter show")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     s = Settings()
@@ -326,6 +381,7 @@ def matter_show(matter_id):
 @click.option("--reason", default="", help="Razón de la transición")
 def matter_advance(matter_id, target, by, reason):
     """Avanza el state machine del matter (monótono)."""
+    _enforce_local_only("matter advance")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     from albra.matters.timeline import MatterTimeline
@@ -347,6 +403,7 @@ def matter_advance(matter_id, target, by, reason):
 @click.argument("matter_id")
 def matter_timeline(matter_id):
     """Muestra el timeline.jsonl del matter."""
+    _enforce_local_only("matter timeline")
     from albra.config.settings import Settings
     from albra.matters.timeline import MatterTimeline
     s = Settings()
@@ -365,6 +422,7 @@ def matter_timeline(matter_id):
 @click.argument("matter_id")
 def matter_audit(matter_id):
     """Verifica el hash chain del audit log del matter."""
+    _enforce_local_only("matter audit")
     from albra.audit.matter_audit import MatterAudit
     from albra.config.settings import Settings
     s = Settings()
@@ -431,6 +489,7 @@ def pending_group() -> None:
 @click.option("--matter", default=None, help="Filtrar por matter_id")
 def pending_list(matter):
     """Lista acciones pendientes de aprobación."""
+    _enforce_local_only("pending list")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     s = Settings()
@@ -457,6 +516,7 @@ def pending_list(matter):
 @click.option("--comment", default="", help="Comentario de la firma")
 def pending_approve(action_id, by, role, comment):
     """Firma una acción pendiente (approval chain)."""
+    _enforce_local_only("pending approve")
     from albra.config.settings import Settings
     from albra.matters.store import MatterStore
     from albra.security.approval_chain import (
