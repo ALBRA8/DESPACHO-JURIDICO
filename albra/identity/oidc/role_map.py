@@ -21,9 +21,38 @@ trusted. An attacker who controls another IdP could mint a JWT with
 ``role: "admin"`` in the default namespace — ALBRA must not honor it.
 
 Custom IdP integration: configure ``OIDC_ROLE_NAMESPACE`` to match
-your IdP's namespace. If your IdP doesn't use namespaces, write a
-custom RoleResolver subclass that maps your IdP's specific claim
-format to ALBRA roles.
+your IdP's namespace. The namespace MUST be a non-empty string (any
+explicit namespace is allowed — e.g. ``https://albra8.com/claims``,
+``https://albra.dev``, ``https://keycloak.albra.dev/realms/albra``).
+An empty namespace is FORBIDDEN — see V6.0.1 below.
+
+V6.0.1 HARDENING — fail-closed on empty namespace:
+    The V6.0 RoleResolver had a code path where
+    ``OIDC_ROLE_NAMESPACE=""`` fell through to
+    ``claims.get(self._mapping.claim_name)`` — accepting the bare
+    ``role`` claim. This contradicted the V6.0 contract
+    "bare role NEVER trusted".
+
+    V6.0.1 closes this with TWO independent layers of defense:
+
+      1. ``RoleMapping.from_env()`` validates the namespace at
+         construction time. An empty namespace raises
+         ``RoleResolutionError("OIDC_ROLE_NAMESPACE is empty — bare
+         role claims are never trusted")``.
+
+      2. ``RoleResolver.resolve()`` independently refuses to look
+         up a role claim when ``self._mapping.namespace`` is empty,
+         even if a misconfigured RoleMapping somehow reaches the
+         resolver. This is defense-in-depth: a future code path
+         that constructs RoleMapping without going through
+         ``from_env()`` cannot accidentally enable bare role trust.
+
+    Behavior matrix:
+      - namespace explicit (e.g. ``https://albra.dev``) → look up
+        ``claims[namespace][claim_name]``. Missing namespace claim →
+        DENY. Bare ``role`` claim → DENY (always).
+      - namespace empty → DENY (fail-closed at config + resolver).
+      - namespace unset → defaults to ``https://albra.dev``.
 
 Production fail-closed:
     - If no role claim is found in the trusted namespace → DENY with
@@ -61,10 +90,10 @@ class RoleMapping:
     Attributes:
         namespace: The JWT claim namespace trusted for role info.
             Default: "https://albra.dev" (Auth0 convention).
-            An EMPTY namespace means "trust bare unnamespaced claims"
-            — this is INSECURE for production and only intended for
-            tightly-controlled IdP integrations where you own the IdP
-            and the claim.
+            V6.0.1: an EMPTY namespace is FORBIDDEN. The RoleResolver
+            will refuse to look up a role claim when namespace is empty,
+            even if a misconfigured RoleMapping reaches the resolver
+            without going through ``from_env()`` (defense in depth).
         claim_name: The claim key inside the namespace (default "role").
         allowed_roles: Set of role values ALBRA accepts (default = the
             5 ALBRA roles).
@@ -75,9 +104,24 @@ class RoleMapping:
 
     @classmethod
     def from_env(cls) -> "RoleMapping":
-        """Build RoleMapping from env vars."""
+        """Build RoleMapping from env vars.
+
+        V6.0.1: if OIDC_ROLE_NAMESPACE is explicitly set to an empty
+        string, raises RoleResolutionError. An empty namespace would
+        enable bare ``role`` claim trust, which contradicts the V6.0
+        contract.
+        """
+        namespace = os.environ.get("OIDC_ROLE_NAMESPACE", "https://albra.dev")
+        # V6.0.1: empty namespace is forbidden. Fail-closed at config.
+        if not namespace or not namespace.strip():
+            raise RoleResolutionError(
+                "OIDC_ROLE_NAMESPACE is empty — bare role claims are "
+                "never trusted. Set an explicit namespace (e.g. "
+                "https://albra.dev or https://albra8.com/claims) or "
+                "unset the variable to use the default."
+            )
         return cls(
-            namespace=os.environ.get("OIDC_ROLE_NAMESPACE", "https://albra.dev"),
+            namespace=namespace,
             claim_name=os.environ.get("OIDC_ROLE_CLAIM", "role"),
             allowed_roles=ALBRA_ROLES,
         )
@@ -87,8 +131,14 @@ class RoleResolver:
     """Resolves an ALBRA role for a verified Identity.
 
     The resolver enforces the trusted-namespace policy: a bare
-    unnamespaced ``role`` claim is NEVER used (unless the namespace
-    is explicitly set to empty — production should never do this).
+    unnamespaced ``role`` claim is NEVER used.
+
+    V6.0.1: even if a misconfigured RoleMapping with an empty namespace
+    reaches this resolver, it refuses to look up the role claim and
+    raises RoleResolutionError. This is defense-in-depth: the
+    ``RoleMapping.from_env()`` factory already rejects empty namespaces,
+    but the resolver independently re-validates to catch any future code
+    path that bypasses the factory.
     """
 
     def __init__(self, mapping: RoleMapping | None = None) -> None:
@@ -110,26 +160,36 @@ class RoleResolver:
         """
         claims = identity.raw_claims or {}
 
-        # 1. Look up the role claim in the trusted namespace.
-        if self._mapping.namespace:
-            ns_claim = claims.get(self._mapping.namespace)
-            if not isinstance(ns_claim, dict):
-                # No namespace claim at all → fail-closed.
-                self._log.warning(
-                    "oidc.role_resolution.denied_no_namespace",
-                    namespace=self._mapping.namespace,
-                    issuer=identity.issuer,
-                )
-                raise RoleResolutionError(
-                    "no trusted role namespace claim found — identity "
-                    "cannot be authorized"
-                )
-            role_value = ns_claim.get(self._mapping.claim_name)
-        else:
-            # Bare unnamespaced claim. INSECURE for production unless
-            # you fully control the IdP. We still enforce the
-            # allowed_roles whitelist.
-            role_value = claims.get(self._mapping.claim_name)
+        # V6.0.1: defense in depth — refuse empty namespace at the
+        # resolver boundary, even if a misconfigured RoleMapping reached
+        # us. This catches any future code path that bypasses
+        # RoleMapping.from_env(). The previous V6.0 code fell through
+        # to claims.get(claim_name) here, enabling bare role trust.
+        if not self._mapping.namespace or not self._mapping.namespace.strip():
+            self._log.warning(
+                "oidc.role_resolution.denied_empty_namespace",
+                issuer=identity.issuer,
+            )
+            raise RoleResolutionError(
+                "OIDC_ROLE_NAMESPACE is empty — bare role claims are "
+                "never trusted"
+            )
+
+        # Look up the role claim in the trusted namespace.
+        # namespace is guaranteed non-empty here.
+        ns_claim = claims.get(self._mapping.namespace)
+        if not isinstance(ns_claim, dict):
+            # No namespace claim at all → fail-closed.
+            self._log.warning(
+                "oidc.role_resolution.denied_no_namespace",
+                namespace=self._mapping.namespace,
+                issuer=identity.issuer,
+            )
+            raise RoleResolutionError(
+                "no trusted role namespace claim found — identity "
+                "cannot be authorized"
+            )
+        role_value = ns_claim.get(self._mapping.claim_name)
 
         if not role_value or not isinstance(role_value, str):
             raise RoleResolutionError(

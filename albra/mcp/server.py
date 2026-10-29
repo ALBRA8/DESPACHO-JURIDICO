@@ -1297,14 +1297,52 @@ class McpHttpServer:
             if method == "GET" and clean_path == "/mcp/health":
                 return self._build(200, self._json(self._health_payload()), {})
 
-            if method == "GET" and clean_path == "/mcp/.well-known/oauth-authorization-server":
-                return self._build(200, self._json(self._oauth_metadata()), {})
+            # V6.0.1: OAuth scaffold endpoints are DISABLED in production.
+            # The V6.0 analysis noted that the scaffold (fake authorize/
+            # token endpoints that mint "albra-token-..." strings) is
+            # inconsistent with the production OIDC pipeline. Although
+            # the scaffold's minted tokens cannot authenticate in
+            # production (see _resolve_auth_context guard at line ~1486:
+            # `if token in self._oauth_tokens and self._auth_mode !=
+            # "production"`), exposing fake OAuth metadata + authorize +
+            # token endpoints in production creates a misleading attack
+            # surface and suggests a fake OAuth flow exists.
+            #
+            # V6.0.1 disables the three scaffold endpoints in production.
+            # Dev/test retain them for compatibility with existing tests
+            # and the dev scaffolding flow.
+            if self._auth_mode != "production":
+                if method == "GET" and clean_path == "/mcp/.well-known/oauth-authorization-server":
+                    return self._build(200, self._json(self._oauth_metadata()), {})
 
-            if method == "GET" and clean_path == "/mcp/oauth/authorize":
-                return self._handle_authorize(parsed.query)
+                if method == "GET" and clean_path == "/mcp/oauth/authorize":
+                    return self._handle_authorize(parsed.query)
 
-            if method == "POST" and clean_path == "/mcp/oauth/token":
-                return self._handle_token(body)
+                if method == "POST" and clean_path == "/mcp/oauth/token":
+                    return self._handle_token(body)
+            else:
+                # V6.0.1: in production, scaffold endpoints return 404
+                # with a clear message that real OIDC is required.
+                # This is a deliberate hard-disable, not a soft warning.
+                if clean_path in (
+                    "/mcp/.well-known/oauth-authorization-server",
+                    "/mcp/oauth/authorize",
+                    "/mcp/oauth/token",
+                ):
+                    return self._build(
+                        404,
+                        self._json({
+                            "error": "scaffold_disabled",
+                            "message": (
+                                "The OAuth scaffold endpoints are disabled "
+                                "in production. Production uses real OIDC "
+                                "via the Authorization: Bearer header. "
+                                "Configure OIDC_ISSUER + OIDC_AUDIENCE + "
+                                "JWKS endpoint to obtain valid access tokens."
+                            ),
+                        }),
+                        {},
+                    )
 
             # Protected POST endpoints.
             if method == "POST" and clean_path == "/mcp/initialize":

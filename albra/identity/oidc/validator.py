@@ -129,18 +129,27 @@ class JWTValidator:
         #    PyJWT's decode() with options= always verifies signature when
         #    a key is provided — there's no way to disable it.
         try:
-            # Build the audience list: include config.audience and
-            # config.client_id (some IdPs include client_id in aud).
-            audiences: list[str] = [self._config.audience]
-            if self._config.client_id and self._config.client_id not in audiences:
-                audiences.append(self._config.client_id)
+            # V6.0.1: OIDC_AUDIENCE is the ONLY audience authorized for
+            # this API. OIDC_CLIENT_ID is the OAuth/OIDC client
+            # identifier (who the token was issued TO), NOT an
+            # alternative audience.
+            #
+            # V6.0 mistakenly added client_id to the accepted audiences
+            # list. That allowed a token whose aud was *only*
+            # OIDC_CLIENT_ID to pass validation, even though the token
+            # was not destined for this API.
+            #
+            # V6.0.1 fix: use ONLY OIDC_AUDIENCE as the accepted
+            # audience. A token whose aud is OIDC_CLIENT_ID (without
+            # OIDC_AUDIENCE) is REJECTED.
+            audience = self._config.audience
 
             claims = jwt.decode(
                 token,
                 key=public_key,
                 algorithms=sorted(self._config.allowed_algorithms),
                 issuer=self._config.issuer,
-                audience=audiences,
+                audience=audience,
                 options={
                     "verify_signature": True,
                     "verify_iss": True,
