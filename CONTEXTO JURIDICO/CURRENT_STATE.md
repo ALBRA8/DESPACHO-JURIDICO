@@ -1,12 +1,223 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V6.0 OIDC/OAUTH IDENTITY REAL`
+- **Estado del documento:** `V6.0.1 CORRECCIONES DE SEGURIDAD OIDC`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V6.0.1:** `9ae644d` (V6.0 docs)
+- **HEAD final V6.0.1:** `66325c6` (V6.0.1 correcciones de seguridad OIDC)
+- **Push:** VERIFIED (9ae644d..66325c6 main)
+- **CI:** Run `40829485498`, commit `66325c6`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1413 passed, 5 skipped
+  - clean-room: SUCCESS
+
+## Commits V6.0.1
+
+| SHA | Mensaje |
+|---|---|
+| `66325c6` | fix: V6.0.1 — correcciones de seguridad OIDC (3 defectos cerrados) |
+
+## Resumen ejecutivo V6.0.1
+
+V6.0.1 es una corrección quirúrgica de tres desviaciones de seguridad
+detectadas en la auditoría independiente de V6.0. **No reconstruye
+V6.0, no abre V6.1, no hace refactors generales, no añade
+funcionalidades jurídicas nuevas.**
+
+Trazabilidad:
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC (este documento)
+
+## Correcciones cerradas
+
+### Corrección A — Role namespace fail-closed
+
+**Problema detectado en V6.0**: `albra/identity/oidc/role_map.py`
+tenía un código donde `OIDC_ROLE_NAMESPACE=""` caía a
+`claims.get(claim_name)` — aceptando un claim bare
+`{role: "admin"}`. Contradecía el contrato V6.0
+"bare role NEVER trusted".
+
+**Fix V6.0.1**: dos capas de defensa independientes:
+1. `RoleMapping.from_env()` valida `namespace` al construir →
+   raise `RoleResolutionError` si vacío/whitespace.
+2. `RoleResolver.resolve()` rechaza independientemente namespace
+   vacío (defense-in-depth) → raise `RoleResolutionError` incluso si
+   un `RoleMapping` mal configurado llega al resolver sin pasar por
+   `from_env`.
+
+**Behavior matrix**:
+- namespace explícito (`https://albra.dev`, `https://albra8.com/claims`,
+  etc.) → ACCEPT
+- namespace vacío → DENY (config + resolver)
+- bare `role` claim → DENY siempre
+
+### Corrección B — Audience ≠ client_id
+
+**Problema detectado en V6.0**: `albra/identity/oidc/validator.py`
+construía `audiences = [OIDC_AUDIENCE, OIDC_CLIENT_ID]` y validaba
+`jwt.decode(audience=audiences)`. Eso permitía aceptar un token
+cuyo `aud` fuera únicamente `OIDC_CLIENT_ID` (sin `OIDC_AUDIENCE`)
+aunque el token no estuviera destinado al API protegido.
+
+**Fix V6.0.1**: el validador usa `OIDC_AUDIENCE` como ÚNICA audiencia
+autorizada. `OIDC_CLIENT_ID` NO se agrega a la lista de audiences.
+Un token con `aud=OIDC_CLIENT_ID` (sin `OIDC_AUDIENCE`) → REJECTED.
+
+### Corrección C — OAuth scaffold disabled in production
+
+**Problema detectado en V6.0**: `albra/mcp/server.py` mantenía
+expuestos los endpoints scaffold
+`/mcp/.well-known/oauth-authorization-server`,
+`/mcp/oauth/authorize`, `/mcp/oauth/token` en producción. Aunque
+los tokens mintados por el scaffold no podían autenticar en
+producción (guard existente en `_resolve_auth_context`), exponer
+los endpoints creaba una superficie OAuth falsa e inconsistente
+con V6.0.
+
+**Fix V6.0.1**: los tres endpoints scaffold se deshabilitan en
+producción (`auth_mode="production"`) y retornan 404 con mensaje
+claro. Dev/test retienen el scaffold para compatibilidad con tests
+existentes.
+
+## Archivos modificados V6.0.1
+
+| Archivo | Cambios | Líneas |
+|---|---|---|
+| `albra/identity/oidc/role_map.py` | `RoleMapping.from_env()` valida namespace no vacío; `RoleResolver.resolve()` rechaza namespace vacío (defense in depth); docstring actualizado con behavior matrix V6.0.1. | +89/-30 |
+| `albra/identity/oidc/validator.py` | `JWTValidator.validate()` usa sólo `OIDC_AUDIENCE` como audiencia; removida la inclusión de `OIDC_CLIENT_ID` en la lista de audiences; docstring explica el fix V6.0.1. | +16/-5 |
+| `albra/mcp/server.py` | `_handle_http_request()` deshabilita los 3 endpoints scaffold en `auth_mode="production"` (retornan 404); dev/test mantienen el scaffold; docstring explica el rationale V6.0.1. | +42/-6 |
+| `tests/identity/oidc/test_v601_security_corrections.py` | NUEVO: 20 tests funcionales (8 corrección A, 4 corrección B, 6 corrección C, 2 regression). Todos invocan operaciones reales, no string inspection. | +367 |
+
+**Sin cambios**: MatterStore, multitenancy (V5.2), RBAC,
+ApprovalChain, ExecutionGuard, HITL, audit, CLI, dev mode, test
+mode. V6.0.1 no reabre ninguna área verificada.
+
+## Pruebas funcionales V6.0.1 (20 tests nuevas)
+
+### Corrección A — Role namespace fail-closed (8 tests)
+
+- `test_a1_empty_namespace_rejected_by_from_env` — config layer
+- `test_a1b_whitespace_namespace_rejected_by_from_env` — config layer
+- `test_a2_resolver_rejects_bare_role_with_empty_namespace` — defense in depth
+- `test_a2b_resolver_rejects_bare_role_with_whitespace_namespace`
+- `test_a3_empty_namespace_production_bare_role_denied` — end-to-end
+- `test_a4_bare_role_claim_never_trusted` — V6.0 contract preserved
+- `test_a5_explicit_namespace_works` — positive regression
+- `test_a5b_custom_namespace_https_albra8_com_claims_works` — brief example
+
+### Corrección B — Audience ≠ client_id (4 tests)
+
+- `test_b1_audience_equal_oidc_audience_accepted` — positive baseline
+- `test_b2_audience_equal_client_id_only_denied` — **the actual fix**
+- `test_b3_audience_includes_oidc_audience_accepted` — aud list with both
+- `test_b4_http_request_with_client_id_only_audience_401` — end-to-end HTTP
+
+### Corrección C — OAuth scaffold disabled in production (6 tests)
+
+- `test_c1_scaffold_discovery_200_in_dev` — dev compatibility preserved
+- `test_c2_scaffold_discovery_404_in_production`
+- `test_c3_scaffold_authorize_404_in_production`
+- `test_c4_scaffold_token_404_in_production`
+- `test_c5_fake_scaffold_token_denied_in_production` — end-to-end
+- `test_c6_health_endpoint_public_in_production` — health unaffected
+
+### Regression (2 tests)
+
+- `test_z1_full_oidc_pipeline_still_works` — full pipeline integrity
+- `test_z2_production_never_falls_back_to_dev` — V6.0 contract preserved
+
+## Conteos
+
+| Métrica | V6.0 (baseline) | V6.0.1 |
+|---|---|---|
+| Tests passed | 1393 | **1413** |
+| Tests skipped | 5 | **5** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+20** |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## CI
+
+- Run ID: `40829485498` (commit `66325c6`)
+- URL: https://github.com/ALBRA8/DESPACHO-JURIDICO/actions/runs/40829485498
+- Status: SUCCESS
+
+## Python matrix
+
+- 3.10: SUCCESS
+- 3.11: SUCCESS
+- 3.12: SUCCESS
+
+## Clean-room
+
+- SUCCESS
+
+## Confirmación de cierre (V6.0.1 brief section 14)
+
+| Criterio | Estado |
+|---|---|
+| Role: empty namespace → DENY | VERIFIED (test_a1, test_a2, test_a3) |
+| Role: bare role → NEVER trusted | VERIFIED (test_a4) |
+| Role: explicit namespace → works | VERIFIED (test_a5, test_a5b) |
+| Audience: OIDC_AUDIENCE → ACCEPT | VERIFIED (test_b1) |
+| Audience: OIDC_CLIENT_ID only → DENY | VERIFIED (test_b2, test_b4) |
+| OAuth scaffold: fake token → DENY in production | VERIFIED (test_c5) |
+| OAuth scaffold: endpoints → 404 in production | VERIFIED (test_c2, test_c3, test_c4) |
+| Integración: Bearer → JWT → Identity → Tenant → Role → AuthContext → MCP → RBAC | VERIFIED (test_z1) |
+| Regresión: full suite → PASS | VERIFIED (1413 passed) |
+| Regresión: lint → PASS | VERIFIED |
+| Regresión: Python 3.10 → PASS | VERIFIED |
+| Regresión: Python 3.11 → PASS | VERIFIED |
+| Regresión: Python 3.12 → PASS | VERIFIED |
+| Regresión: clean-room → PASS | VERIFIED |
+
+## Out of scope / future work
+
+Ningún defecto adicional fue encontrado durante V6.0.1. Si durante
+la implementación se hubiera encontrado otro problema no necesario
+para estos tres objetivos, se habría registrado aquí. No se encontró
+ninguno.
+
+## Estado de producción
+
+| Dimensión | Estado |
+|---|---|
+| **OIDC code** | IMPLEMENTED (V6.0) + CORRECTED (V6.0.1) |
+| **Provider configuration** | PENDING — requiere configurar Auth0 tenant / Keycloak realm real con env vars |
+| **External secrets** | PENDING — requiere ALBRA_JWT_SECRET + ALBRA_ADMIN_PASSWORD operativos + OIDC secrets del IdP |
+| **Deployment** | PENDING — requiere infraestructura + secrets operativos |
+
+## Dictamen diferenciado
+
+| Dimensión | Estado |
+|---|---|
+| **Seguridad verificada en código y pruebas** | VERIFIED — bare role fail-closed (config + resolver); audience ≠ client_id; OAuth scaffold disabled in production. 20 tests negativos nuevos invocan operaciones reales. |
+| **Autenticación OAuth real** | IMPLEMENTED + CORRECTED — pipeline OIDC provider-neutral completo con V6.0.1 cerrando las 3 desviaciones. Auth0 documentado como referencia. Cambiar a Keycloak requiere sólo env vars. **No se integró un provider real en este commit** (cumple restricción del brief: "No desplegar en producción"). |
+| **Despliegue productivo** | BLOQUEADO — requiere infraestructura + secrets operativos. No se desplegó en V6.0.1 (cumple restricción del brief). |
+
+## Limitaciones externas pendientes
+
+| Componente | Razón |
+|---|---|
+| MCP OAuth provider real (Auth0 tenant / Keycloak realm) | Requiere cuenta + configuración en el IdP externo. La arquitectura V6.0 + V6.0.1 está lista; sólo falta configurar env vars en producción. No requiere cambios de código. |
+| LLM Anthropic/OpenAI | Requiere API keys válidas |
+| USDC settlement | Requiere wallet + smart contract |
+| Deployment | Requiere infraestructura + secrets operativos |
+
+---
+
+# Histórico: V6.0 (OIDC/OAuth 2.0 identity real para producción)
+
 - **HEAD inicial V6.0:** `3bbb1b5` (V5.2 CURRENT_STATE)
 - **HEAD final V6.0:** `18b29a3` (V6.0 OIDC/OAuth identity)
-- **Push:** pending
-- **CI:** pending
+- **CI:** Run `40827095936`, commit `9ae644d`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1393 passed, 5 skipped
+  - clean-room: SUCCESS
 
 ## Commits V6.0
 
