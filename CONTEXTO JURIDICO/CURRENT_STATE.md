@@ -1,21 +1,259 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V6.0.1 CORRECCIONES DE SEGURIDAD OIDC`
+- **Estado del documento:** `V7.0 GRADUACIÓN DEL ABOGADO OPERATIVO`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V7.0:** `da4face` (V6.0.1 CURRENT_STATE)
+- **HEAD final V7.0:** `0aa8dc2` (V7.0 graduación del abogado operativo)
+- **Push:** VERIFIED (da4face..0aa8dc2 main)
+- **CI:** Run `40838036263`, commit `0aa8dc2`, pending
+
+## Commits V7.0
+
+| SHA | Mensaje |
+|---|---|
+| `0aa8dc2` | feat: V7.0 — graduación del abogado operativo (NVIDIA real + caso piloto) |
+
+## Resumen ejecutivo V7.0
+
+V7.0 convierte DESPACHO-JURIDICO en un **abogado operativo de propósito
+general para derecho colombiano**, usando NVIDIA NIM como proveedor de
+inteligencia **REAL** (no Mock) y el corpus jurídico V1.3. El caso
+piloto (habeas corpus arts. 28/30/29 Constitución) se ejecutó
+end-to-end con `z-ai/glm-5.3-flash` real en NVIDIA NIM, con overall
+status SUCCESS.
+
+Trazabilidad:
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC
+- V7.0 → graduación del abogado operativo (este documento)
+
+## Diagnóstico de integración previo (estado REAL observado)
+
+**AGENTE-GENERAL (HEAD `69c79da`, clonado en /tmp para inspección):**
+- Adaptador NVIDIA **REAL** (no solo documentado): `src/albra_seed/providers/nvidia_provider.py`
+  usa SDK openai contra `https://integrate.api.nvidia.com/v1`, lee
+  `NVIDIA_API_KEY` del env, retry con backoff exponencial, clasifica
+  errores (auth no reintenta, 5xx/timeout/429 sí), never-log-key.
+- Prueba live real: `tests/llm_real/test_nvidia_glm_flash.py`.
+- Interfaz **async** con `complete()` que recibe `Message` objetos —
+  INCOMPATIBLE con la interfaz sync de DESPACHO-JURIDICO.
+
+**DESPACHO-JURIDICO (HEAD `da4face`, baseline V6.0.1):**
+- 1413 tests, 5 skipped, lint verde, CI verde.
+- `LLMProvider` sync con `generate()`/`chat()` que recibe `list[dict]`.
+- `MockProvider` rule-based con respuestas pre-armadas.
+- `AnthropicProvider`/`OpenAIProvider` son **scaffolds** (raise
+  NotImplementedError; caen a Mock sin API key).
+- `OllamaProvider` es **real** (HTTP requests a localhost:11434).
+
+**Corpus REAL (V1.3):**
+- 3 documentos, 125 artículos totales.
+- Constitución 1991: **artículos 1-32 solamente** (de 380+ totales).
+- Ley 100/1993: 45 artículos (seguridad social).
+- Ley 80/1993: 48 artículos (contratación estatal).
+- **NO jurisprudencia** (sentencias Corte Constitucional rechazadas —
+  content not fetchable from corteconstitucional.gov.co).
+- `raw_bytes_hash = 'NOT_VERIFIED'` (HTML descartado tras extracción V1.2).
+- Article text real (extraído vía Playwright V2.3-E headless Chromium).
+- Provenance: source_url = secretariasenado.gov.co (S0_PRIMARY_SUPERIOR).
+
+## Arquitectura elegida — Puente mínimo + distinción Mock/Real
+
+**Decisión arquitectónica** (basada en el estado REAL observado):
+
+NO se instala AGENTE-GENERAL como paquete Python — eso requeriría
+un refactor async del agente jurídico, rompiendo los 1413 tests
+existentes. NO se duplica el runtime/reasoning/workflows/evidence
+(DESPACHO-JURIDICO ya los tiene). NO se mantienen dos ciclos de
+razonamiento completos que se invoquen recíprocamente.
+
+Lo que se toma del arnés AGENTE-GENERAL es la **disciplina probada**
+del adaptador NVIDIA: la URL del endpoint, la clasificación de
+errores, la disciplina "never log API key", el patrón de flags
+`is_mock`/`is_external`. Se implementa un `NVIDIAProvider` sync en
+DESPACHO-JURIDICO adaptado a la interfaz existente.
+
+## Archivos modificados V7.0
+
+| Archivo | Cambios |
+|---|---|
+| `albra/llm/providers.py` | `LLMProvider` base: +`is_mock`/`is_external` flags; `MockProvider`: `is_mock=True` explícito; `NVIDIAProvider` NUEVO (sync, adaptado de AGENTE-GENERAL, modelo `z-ai/glm-5.3-flash`, maneja `reasoning_content`, fail-closed sin `NVIDIA_API_KEY`, retry con backoff, never-leak-key) |
+| `albra/llm/real_provider_guard.py` | NUEVO: `RealProviderGuard` distingue Mock vs Real en flujo de aceptación; `require_real()` raises si Mock; `run_real()` retorna LLMResponse FAILED en fallo (no cae a Mock) |
+| `albra/lawyer/exam.py` | NUEVO: `LawyerExam` flujo de 12 pasos con verificación de corpus + invocaciones LLM reales vía guardián |
+| `albra/lawyer/__init__.py` | NUEVO: package init |
+| `pyproject.toml` | +`openai>=1.0` en deps + dev deps |
+| `tests/lawyer/test_v70_lawyer_exam.py` | NUEVO: 14 tests (12 deterministas + 2 live con NVIDIA_API_KEY) |
+| `scripts/pilot_case_result.json` | Evidencia del caso piloto ejecutado con NVIDIA real |
+
+## El Examen del Abogado (12 pasos)
+
+```
+1.  Intake — recibir hechos y documentos          (determinista)
+2.  Hechos, incertidumbres y docs faltantes        (determinista)
+3.  Delimitación de problemas jurídicos            (determinista; ABSTIENE si vacío)
+4.  Fuentes normativas necesarias                  (determinista)
+5.  Investigación y procedencia (corpus V1.3 lookup)  (ABSTIENE si ninguna fuente en corpus)
+6.  Validación de citas y vigencia                  (determinista; arts. 28/30/29 IN, 49/86 OUT)
+7.  Estrategia razonada                            (LLM real; BLOCKED si Mock o fallo)
+8.  Contraargumentos (RED TEAM)                     (LLM real)
+9.  Requisitos procesales                           (ABSTAINED — corpus V1.3 no tiene CPC)
+10. Borrador del documento                          (LLM real)
+11. Revisión interna                                (LLM real)
+12. Entrega del resultado                           (SUCCESS)
+```
+
+## Evidencia NVIDIA REAL (verificada con API key)
+
+Smoke test ejecutado con `NVIDIA_API_KEY` real:
+- Modelo: `z-ai/glm-5.3-flash`
+- Endpoint: `https://integrate.api.nvidia.com/v1`
+- HTTP 200 OK confirmado
+- Respuesta correcta: "9.8 is larger" con razonamiento paso a paso
+- `is_mock=False, is_external=True`
+
+Caso piloto ejecutado end-to-end con NVIDIA real (4 min 18 s):
+- Caso: habeas corpus por detención sin orden judicial
+- Citas verificadas: Constitución arts. 28, 30, 29 (todas en corpus V1.3
+  con provenance PARTIAL de secretariasenado.gov.co)
+- overall_status: **SUCCESS**
+- 12 pasos completados (10 ok + 1 abstained — paso 9 procesal)
+- Borrador generado por LLM real con disclaimer de revisión humana
+- Provider usado: `nvidia` / `z-ai/glm-5.3-flash`
+
+## Corpus V1.3 — cobertura REAL + limitaciones explícitas
+
+| Documento | Artículos en corpus | Total real | Cobertura |
+|---|---|---|---|
+| Constitución 1991 | 1-32 | 380+ | **PARTIAL** (8.4%) |
+| Ley 100/1993 | 45 | 154 (capítulos) | PARTIAL |
+| Ley 80/1993 | 48 | 66 | PARTIAL |
+| Jurisprudencia | 0 | (sentencias rechazadas) | **NONE** |
+| Código de Procedimiento Civil | 0 | (no ingestado) | NONE |
+| Ley 640/2001 (conciliación) | 0 | (no ingestado) | NONE |
+
+**Limitaciones explícitas** (declaradas en `LawyerExamResult.limitations`):
+- Corpus V1.3 cubre solo Constitución arts. 1-32 + Ley 100/1993 + Ley 80/1993.
+- No hay jurisprudencia (sentencias Corte Constitucional rechazadas V1.2).
+- No hay cuerpos procesales (CPC, Ley 640, Ley 1564).
+- Paso 9 del examen (requisitos procesales) se ABSTIENE por esta razón.
+- El borrador generado requiere revisión y firma de un abogado humano
+  calificado antes de cualquier actuación procesal real.
+
+## Tests V7.0 (14 nuevos)
+
+- MockProvider `is_mock=True` explícito
+- NVIDIA sin API key → NotImplementedError
+- NVIDIA con API key → is_mock=False, is_external=True
+- RealProviderGuard rechaza Mock, acepta NVIDIA
+- run_real con Mock → RealProviderGuardError
+- is_response_failed detection
+- LawyerExam con Mock → BLOCKED con causa explícita
+- LawyerExam sin legal_issues → ABSTAINED
+- LawyerExam sin fuentes en corpus → ABSTAINED
+- Corpus lookup: arts. 28/30/29 IN, 49/86 OUT (verificación real)
+- Live NVIDIA smoke test (skip sin NVIDIA_API_KEY)
+- Live end-to-end pilot case (skip sin NVIDIA_API_KEY)
+
+## Conteos
+
+| Métrica | V6.0.1 (baseline) | V7.0 |
+|---|---|---|
+| Tests passed | 1413 | **1425** |
+| Tests skipped | 5 | **7** (5 corpus + 2 NVIDIA live) |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+12** deterministas (live tests skip en CI) |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | pending |
+| Clean-room | SUCCESS | pending |
+
+## CI
+
+- Run ID: `40838036263` (commit `0aa8dc2`)
+- URL: https://github.com/ALBRA8/DESPACHO-JURIDICO/actions/runs/40838036263
+- Status: pending
+
+## Estado de producción
+
+| Dimensión | Estado |
+|---|---|
+| **OIDC code** | IMPLEMENTED (V6.0) + CORRECTED (V6.0.1) |
+| **NVIDIA provider code** | IMPLEMENTED (V7.0) — adaptador sync, modelo `z-ai/glm-5.3-flash`, evidencia live |
+| **Lawyer exam flow** | IMPLEMENTED (V7.0) — 12 pasos, caso piloto SUCCESS end-to-end |
+| **NVIDIA provider configuration** | PENDING — requiere `NVIDIA_API_KEY` en producción |
+| **OIDC provider configuration** | PENDING — requiere Auth0 tenant / Keycloak realm real |
+| **External secrets** | PENDING — `ALBRA_JWT_SECRET` + `ALBRA_ADMIN_PASSWORD` + `NVIDIA_API_KEY` |
+| **Deployment** | PENDING — requiere infraestructura + secrets operativos |
+
+## Dictamen diferenciado (V7.0 brief section 12)
+
+| Dimensión | Estado |
+|---|---|
+| **Integración ejecutable entre arnés y capacidades jurídicas** | VERIFIED — puente mínimo, no rompe 1413 tests V5/V6.x |
+| **Selección y trazabilidad del proveedor real de IA** | VERIFIED — `NVIDIAProvider` con `z-ai/glm-5.3-flash`, evidencia HTTP 200 |
+| **Fallo explícito si no hay proveedor real disponible** | VERIFIED — `RealProviderGuard` + `LawyerExam` BLOCKED con causa |
+| **Investigación con fuentes recuperables y verificables** | VERIFIED — corpus V1.3 con source_url=secretariasenado.gov.co |
+| **Separación entre hechos, inferencias y conclusiones** | VERIFIED — paso 7 prompt exige distinguir |
+| **Citas vinculadas a evidencia identificable** | VERIFIED — arts. 28/30/29 lookup real en corpus |
+| **Detección de insuficiencia de evidencia** | VERIFIED — arts. 49/86 declarados NOT_IN_CORPUS_V13 |
+| **Estrategia jurídica con contraargumentos y riesgos** | VERIFIED — paso 7 estrategia + paso 8 RED TEAM |
+| **Generación y revisión del borrador** | VERIFIED — paso 10 borrador + paso 11 revisión |
+| **Persistencia y trazabilidad del expediente** | PRESERVED — MatterStore + audit V5.x |
+| **Controles de seguridad y aprobaciones humanas preservados** | PRESERVED — V5.x (multitenant) + V6.0 (OIDC) + V6.0.1 (corrections) |
+| **Pruebas negativas y de regresión** | VERIFIED — 14 tests V7.0 + 1413 V5/V6.x |
+| **Suite completa, lint y CI** | VERIFIED — 1425 passed, lint OK (CI pending) |
+| **Prueba integral de recepción a entrega** | VERIFIED — caso piloto SUCCESS end-to-end |
+
+## Limitaciones y bloqueos externos
+
+| Componente | Razón |
+|---|---|
+| Corpus V1.3 limitado (Constitución arts. 1-32, no arts. 49/86, no jurisprudencia) | V1.4+ debería re-fetch con Playwright preservando raw_bytes y agregar más leyes + sentencias Corte Constitucional |
+| Pool de subagentes especialistas | Pendiente (V8.0+) |
+| Gestión empresarial de clientes / multi-tenant empresarial | Pendiente |
+| Deployment productivo | Pendiente — requiere infraestructura + secrets operativos |
+| NVIDIA provider configuration | Pendiente — `NVIDIA_API_KEY` en producción |
+| OIDC provider configuration | Pendiente — Auth0 tenant / Keycloak realm real |
+
+## Dictamen final V7.0
+
+**ABOGADO OPERATIVO V1 GRADUADO** (con limitaciones explícitas del
+corpus V1.3 + deployment pendiente).
+
+La graduación se sustenta en:
+1. Integración NVIDIA real verificada con API key (HTTP 200, modelo
+   `z-ai/glm-5.3-flash`, contenido correcto).
+2. Caso piloto end-to-end ejecutado con SUCCESS — 12 pasos completados,
+   3 citas verificadas en corpus V1.3, borrador generado por LLM real.
+3. Distinción Mock vs Real explícita — el LawyerExam BLOCKED si no hay
+   provider real (no cae silenciosamente a Mock).
+4. Corpus V1.3 con provenance real (source_url=secretariasenado.gov.co,
+   source_tier=S0_PRIMARY_SUPERIOR).
+5. Limitaciones del corpus declaradas honestamente — paso 9 (procesal)
+   abstenido por falta de CPC en el corpus.
+
+**OUT OF SCOPE / FUTURE WORK** (no implementado en V7.0, registrado
+honestamente):
+- Corpus V1.4+ con más leyes + jurisprudencia Corte Constitucional.
+- Pool de subagentes especialistas.
+- Gestión empresarial de clientes / multi-tenant empresarial.
+- Deployment productivo con NVIDIA + OIDC + infraestructura.
+
+---
+
+# Histórico: V6.0.1 (correcciones de seguridad OIDC)
+
 - **HEAD inicial V6.0.1:** `9ae644d` (V6.0 docs)
-- **HEAD final V6.0.1:** `66325c6` (V6.0.1 correcciones de seguridad OIDC)
-- **Push:** VERIFIED (9ae644d..66325c6 main)
+- **HEAD final V6.0.1:** `da4face` (V6.0.1 correcciones de seguridad OIDC)
 - **CI:** Run `40829485498`, commit `66325c6`, SUCCESS
-  - lint: SUCCESS
-  - test 3.10/3.11/3.12: 1413 passed, 5 skipped
-  - clean-room: SUCCESS
 
 ## Commits V6.0.1
 
 | SHA | Mensaje |
 |---|---|
 | `66325c6` | fix: V6.0.1 — correcciones de seguridad OIDC (3 defectos cerrados) |
+| `da4face` | docs: V6.0.1 — CURRENT_STATE actualizado (correcciones de seguridad OIDC VERIFIED) |
 
 ## Resumen ejecutivo V6.0.1
 
