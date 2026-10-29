@@ -630,13 +630,19 @@ class McpServer:
         )
 
     def _tool_advance_matter(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Tool 5: advance_matter(matter_id, target_state, by, reason) → Matter.as_dict()."""
+        """Tool 5: advance_matter(matter_id, target_state, by, reason).
+
+        V4.1: tenant_id from _auth prevents cross-tenant advance by ID.
+        """
         store = self._store()
+        auth_meta = args.get("_auth", {})
+        tenant_id = auth_meta.get("tenant_id")
         matter = store.advance_state(
             args["matter_id"],
             args["target_state"],
             by=args.get("by", "system"),
             reason=args.get("reason", ""),
+            tenant_id=tenant_id,
         )
         return matter.as_dict()
 

@@ -174,9 +174,21 @@ class MatterStore:
         self.log.info("matter.create", matter_id=matter.id, client=client, area=area)
         return matter
 
-    def get_matter(self, matter_id: str) -> Matter | None:
+    def get_matter(self, matter_id: str, *, tenant_id: str | None = None) -> Matter | None:
+        """Retrieves a matter by ID. If tenant_id is provided, verifies ownership.
+
+        V4.1: tenant_id check prevents cross-tenant access by ID.
+        A valid matter_id from another tenant returns None (not found).
+        """
+        if tenant_id:
+            cur = self._conn.execute(
+                "SELECT id FROM matters WHERE id = ? AND tenant_id = ?",
+                (matter_id, tenant_id),
+            )
+            if not cur.fetchone():
+                return None
         cur = self._conn.execute(
-            "SELECT id, client, area, state, created_by, created_at, updated_at, "
+            "SELECT id, tenant_id, client, area, state, created_by, created_at, updated_at, "
             "state_history_json, deadlines_json, metadata_json "
             "FROM matters WHERE id = ?",
             (matter_id,),
@@ -191,11 +203,11 @@ class MatterStore:
         )
         parties = [{"name": r[0], "role": r[1]} for r in pcur.fetchall()]
         return Matter(
-            id=row[0], client=row[1], area=row[2], state=row[3],
-            created_by=row[4] or "", created_at=row[5], updated_at=row[6],
-            state_history=json.loads(row[7]),
-            deadlines=json.loads(row[8]),
-            metadata=json.loads(row[9]),
+            id=row[0], client=row[2], area=row[3], state=row[4],
+            created_by=row[5] or "", created_at=row[6], updated_at=row[7],
+            state_history=json.loads(row[8]),
+            deadlines=json.loads(row[9]),
+            metadata=json.loads(row[10]),
             parties=[p["name"] for p in parties],
         )
 
@@ -234,9 +246,14 @@ class MatterStore:
         *,
         by: str = "system",
         reason: str = "",
+        tenant_id: str | None = None,
     ) -> Matter:
-        """Avanza el state machine del matter. Lanza InvalidTransitionError si inválida."""
-        matter = self.get_matter(matter_id)
+        """Avanza el state machine del matter.
+
+        V4.1: tenant_id check prevents cross-tenant advance by ID.
+        Raises KeyError if matter not found OR not in tenant.
+        """
+        matter = self.get_matter(matter_id, tenant_id=tenant_id)
         if not matter:
             raise KeyError(f"Matter not found: {matter_id}")
         if target not in MATTER_STATES:
@@ -285,7 +302,11 @@ class MatterStore:
         )
         return action_id
 
-    def get_pending_action(self, action_id: str) -> dict[str, Any] | None:
+    def get_pending_action(self, action_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+        """Retrieves a pending action by ID. If tenant_id provided, verifies matter ownership.
+
+        V4.1: tenant_id check prevents cross-tenant access to pending actions.
+        """
         cur = self._conn.execute(
             "SELECT id, matter_id, action_type, description, minimum_human_signoff, "
             "approvals_json, status, created_at, decided_at, decided_by "
@@ -295,6 +316,14 @@ class MatterStore:
         row = cur.fetchone()
         if not row:
             return None
+        # V4.1: verify matter belongs to tenant
+        if tenant_id:
+            matter_check = self._conn.execute(
+                "SELECT 1 FROM matters WHERE id = ? AND tenant_id = ?",
+                (row[1], tenant_id),
+            )
+            if not matter_check.fetchone():
+                return None  # matter not in tenant → deny access
         return {
             "id": row[0], "matter_id": row[1], "action_type": row[2],
             "description": row[3] or "", "minimum_human_signoff": row[4],
@@ -303,16 +332,30 @@ class MatterStore:
             "decided_at": row[8], "decided_by": row[9],
         }
 
-    def list_pending(self, matter_id: str | None = None) -> list[dict[str, Any]]:
-        q = ("SELECT id FROM pending_actions WHERE status = 'PENDING' "
-             "ORDER BY created_at ASC")
-        args: list[Any] = []
-        if matter_id:
+    def list_pending(self, matter_id: str | None = None, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        """Lists pending actions. If tenant_id provided, only returns actions for matters in that tenant.
+
+        V4.1: tenant_id filter prevents cross-tenant enumeration of pending actions.
+        """
+        if tenant_id:
+            q = ("SELECT pa.id FROM pending_actions pa "
+                 "JOIN matters m ON pa.matter_id = m.id "
+                 "WHERE pa.status = 'PENDING' AND m.tenant_id = ? ")
+            args: list[Any] = [tenant_id]
+            if matter_id:
+                q += "AND pa.matter_id = ? "
+                args.append(matter_id)
+            q += "ORDER BY pa.created_at ASC"
+        elif matter_id:
             q = ("SELECT id FROM pending_actions WHERE status = 'PENDING' "
                  "AND matter_id = ? ORDER BY created_at ASC")
             args = [matter_id]
+        else:
+            q = ("SELECT id FROM pending_actions WHERE status = 'PENDING' "
+                 "ORDER BY created_at ASC")
+            args = []
         cur = self._conn.execute(q, args)
-        return [a for (aid,) in cur.fetchall() if (a := self.get_pending_action(aid)) is not None]
+        return [a for (aid,) in cur.fetchall() if (a := self.get_pending_action(aid, tenant_id=tenant_id)) is not None]
 
     def add_approval(
         self,
@@ -321,13 +364,13 @@ class MatterStore:
         by: str,
         role: str,
         comment: str = "",
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Añade una firma a la acción pendiente.
 
-        Returns the updated action dict. Status becomes APPROVED when
-        approvals count >= minimum_human_signoff.
+        V4.1: tenant_id check prevents cross-tenant approval.
         """
-        action = self.get_pending_action(action_id)
+        action = self.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise KeyError(f"Pending action not found: {action_id}")
         if action["status"] != "PENDING":
@@ -370,8 +413,10 @@ class MatterStore:
         by: str,
         role: str,
         comment: str = "",
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        action = self.get_pending_action(action_id)
+        """V4.1: tenant_id check prevents cross-tenant rejection."""
+        action = self.get_pending_action(action_id, tenant_id=tenant_id)
         if not action:
             raise KeyError(f"Pending action not found: {action_id}")
         if action["status"] != "PENDING":
