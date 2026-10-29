@@ -1,15 +1,119 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V8.0 FASE 2 — VALIDACIÓN JURÍDICA`
+- **Estado del documento:** `V8.0 FASE 2.2 — CORRECCIÓN VERIFICABLE DE B7`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V8.0 Fase 2.2:** `9af39dd` (V8.0 Fase 2 docs)
+- **HEAD final V8.0 Fase 2.2:** `688dec6` (V8.0 Fase 2.2 — corrección B7)
+- **Push:** VERIFIED (9af39dd..688dec6 main)
+- **CI:** Run `40891572866`, commit `688dec6`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1478 passed, 7 skipped
+  - clean-room: SUCCESS
+
+## Commits V8.0 Fase 2.2
+
+| SHA | Mensaje |
+|---|---|
+| `688dec6` | fix: V8.0 Fase 2.2 — corrección verificable de B7 + defectos confirmados |
+
+## Resumen ejecutivo V8.0 Fase 2.2
+
+Corrige los 4 hallazgos de la auditoría B7 (Fase 2.1) e implementa
+`_check_explicit_conflict_markers()` con criterios estrictos basados
+en cross-references explícitas.
+
+Trazabilidad:
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC
+- V7.0 → graduación del abogado operativo
+- V8.0 Fase 1 → Corpus V1.4 (2107 artículos + 5 sentencias)
+- V8.0 Fase 2 → Validación jurídica
+- V8.0 Fase 2.2 → Corrección verificable de B7 (este documento)
+
+## Correcciones implementadas
+
+### HALLAZGO 2 — Inconsistencia de regex: RESUELTO
+`contradiction.py` ahora usa el mismo regex simplificado que `vigency.py`.
+
+### HALLAZGO 3 — Marcadores "adicionado por" y "subrogado por": RESUELTO
+- `_ADICIONADO_POR` (30 ocurrencias en CPP+CST) → `modified`/`modification`
+- `_SUBROGADO_POR` (5 ocurrencias en CST) → `modified`/`modification`
+
+### HALLAZGO 5 — Test con nombre engañoso: RESUELTO
+Renombrado `test_contradiction_explicit_conflict_synthetic` →
+`test_contradiction_modification_detected_synthetic`.
+
+### HALLAZGO 6 — Test que no probaba lo que decía: RESUELTO
+`test_lawyer_exam_step_7_blocks_on_superseded_norm` corregido con
+`_StubLLMProvider` (is_mock=False, is_external=True) que permite al
+`RealProviderGuard` aceptarlo como real. Solo `AdversarialValidator`
+puede bloquear en paso 7. Test complementario verifica que el mismo
+stub + artículos limpios (arts. 28/29/30) NO bloquea.
+
+### B7 — `_check_explicit_conflict_markers()`: IMPLEMENTADO (parcial)
+- Detecta cross-references explícitas: "incompatible con el artículo N",
+  "contraviene el artículo N", "en contravía de lo dispuesto en el
+  artículo N" donde N coincide con el otro artículo citado.
+- NO activa con: "no obstante" (excepción), "sin perjuicio de"
+  (concurrencia), "se exceptúa" (excepción).
+- En corpus V1.4 real: ningún par de artículos activa este mecanismo.
+- **B7 queda como PARCIALMENTE RESUELTA.**
+
+## Estado B7 después de Fase 2.2
+
+| Aspecto | Antes (Fase 2) | Después (Fase 2.2) |
+|---|---|---|
+| `_check_explicit_conflict_markers()` | Código muerto (return "") | **Implementado** con cross-reference checking |
+| Regex consistency (HALLAZGO 2) | Inconsistente | **Unificado** |
+| "adicionado por" (HALLAZGO 3) | No detectado | **Detectado** como modified/modification |
+| "subrogado por" (HALLAZGO 3) | No detectado | **Detectado** como modified/modification |
+| Tests engañosos (HALLAZGOS 5, 6) | Engañosos | **Corregidos** con _StubLLMProvider |
+| B7 overall | NO RESUELTA | **PARCIALMENTE RESUELTA** |
+
+## Limitación B7 — explícita
+
+`_check_explicit_conflict_markers()` detecta únicamente cross-references
+explícitas con número de artículo coincidente. No detecta contradicciones
+semánticas generales. En el corpus V1.4 real, ningún par de artículos
+activa este mecanismo. B7 queda como PARCIALMENTE RESUELTA hasta que
+exista una ontología jurídica (Fase 3 o trabajo futuro).
+
+## Conteos
+
+| Métrica | V8.0 Fase 2 (baseline) | V8.0 Fase 2.2 |
+|---|---|---|
+| Tests passed | 1466 | **1478** |
+| Tests skipped | 7 | **7** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+12** |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## Confirmaciones
+
+- AGENTE-GENERAL: HEAD `69c79da`, no modificado ✓
+- Corpus V1.3: preservado sin cambios ✓
+- Corpus V1.4: preservado sin cambios ✓
+- `exam.py`: solo `_lookup_in_corpus` modificado (aliases + V1.3→V1.4) ✓
+- Seguridad, RBAC, OIDC, auth, audit: sin cambios ✓
+- NVIDIAProvider: sin cambios ✓
+- Abstenciones legítimas: preservadas ✓
+
+## Próximas fases (NO iniciadas)
+
+- Fase 3: Pool de especialistas (arquitectura de contrato, sin desplegar)
+- Fase 4: Preparación para producción (solo documentación)
+
+---
+
+# Histórico: V8.0 Fase 2 (Validación jurídica)
+
 - **HEAD inicial V8.0 Fase 2:** `d28a5d3` (V8.0 Fase 1 docs)
 - **HEAD final V8.0 Fase 2:** `1e4ad53` (V8.0 Fase 2 — Validación jurídica)
-- **Push:** VERIFIED (d28a5d3..1e4ad53 main)
 - **CI:** Run `40876863242`, commit `1e4ad53`, SUCCESS
-  - lint: SUCCESS
-  - test 3.10/3.11/3.12: 1466 passed, 7 skipped
-  - clean-room: SUCCESS
 
 ## Commits V8.0 Fase 2
 
