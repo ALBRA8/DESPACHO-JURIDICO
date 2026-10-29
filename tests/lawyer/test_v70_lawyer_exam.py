@@ -133,12 +133,14 @@ def test_lawyer_exam_abstains_without_legal_issues():
 
 
 def test_lawyer_exam_abstains_when_sources_not_in_corpus():
+    # V8.0 Fase 2.2: art. 49 is NOW in corpus V1.4 (380 articles).
+    # Use art. 999 which is genuinely NOT in any corpus version.
     case = {
-        "summary": "needs art. 49 — NOT in corpus",
+        "summary": "needs art. 999 — NOT in corpus",
         "facts": ["fact"],
-        "legal_issues": ["tutela salud"],
+        "legal_issues": ["unknown issue"],
         "required_sources": [
-            {"document": "constitucion", "article": "49"},
+            {"document": "constitucion", "article": "999"},
         ],
     }
     mock = MockProvider()
@@ -156,8 +158,9 @@ def test_corpus_lookup_known_articles():
     exam = LawyerExam(case_id="test-lookup", case_facts={}, guard=guard)
     for art in ["28", "30", "29"]:
         found = exam._lookup_in_corpus("constitucion", art)
-        assert found is not None, f"Constitución art. {art} debe estar en corpus V1.3"
-        assert found["provenance_status"] == "PARTIAL"
+        assert found is not None, f"Constitución art. {art} debe estar en corpus V1.4"
+        # V8.0 Fase 2.2: V1.4 upgraded provenance from PARTIAL to VERIFIED
+        assert found["provenance_status"] in ("PARTIAL", "VERIFIED")
         assert "secretariasenado.gov.co" in found["source_url"]
 
 
@@ -165,7 +168,9 @@ def test_corpus_lookup_unknown_articles():
     mock = MockProvider()
     guard = RealProviderGuard(provider=mock, role="lawyer")
     exam = LawyerExam(case_id="test-lookup2", case_facts={}, guard=guard)
-    for art in ["49", "86", "380"]:
+    # V8.0 Fase 2.2: V1.4 now has arts. 1-380, so art. 49/86/380 ARE in corpus.
+    # Use articles that are genuinely NOT in V1.4 (> 380 or non-existent docs).
+    for art in ["381", "500", "999"]:
         found = exam._lookup_in_corpus("constitucion", art)
         assert found is None
 

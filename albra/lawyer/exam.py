@@ -387,39 +387,62 @@ class LawyerExam:
         self._record_step(step)
 
     def _lookup_in_corpus(self, doc_name: str, article_num: str) -> dict[str, Any] | None:
-        """Look up a specific article in the V1.3 corpus.
+        """Look up a specific article in the V1.4 corpus (with V1.3 fallback).
+
+        V8.0 Fase 2.2: updated from V1.3 to V1.4 so that the LawyerExam
+        can find articles in the expanded corpus (CST, CGP, CPP, Ley 640,
+        sentencias). V1.3 is used as fallback if V1.4 import fails.
 
         Returns the article dict (with provenance) if found, else None.
         """
+        # V8.0 Fase 2.2: try V1.4 first, fall back to V1.3.
+        corpus = None
         try:
-            from albra.knowledge.colombia.corpus_pilot.real_corpus_v13 import (
-                ALL_DOCUMENTS_V13,
+            from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import (
+                ALL_DOCUMENTS_V14,
             )
+            corpus = ALL_DOCUMENTS_V14
         except ImportError:
-            return None
+            pass
+        if corpus is None:
+            try:
+                from albra.knowledge.colombia.corpus_pilot.real_corpus_v13 import (
+                    ALL_DOCUMENTS_V13,
+                )
+                corpus = ALL_DOCUMENTS_V13
+            except ImportError:
+                return None
         # Map common aliases to the corpus document_type keys.
         aliases = {
             "constitucion": "constitucion",
             "constitución": "constitucion",
             "constitución política de 1991": "constitucion",
-            "constitucion politica de 1991": "constitucion",
+            "codigo_sustantivo_trabajo": "codigo_sustantivo_trabajo",
+            "cst": "codigo_sustantivo_trabajo",
+            "codigo sustantivo del trabajo": "codigo_sustantivo_trabajo",
+            "ley 1564": "ley_1564_2012",
+            "ley 1564 de 2012": "ley_1564_2012",
+            "cgp": "ley_1564_2012",
+            "ley 640": "ley_0640_2001",
+            "ley 640 de 2001": "ley_0640_2001",
+            "ley 906": "ley_0906_2004",
+            "ley 906 de 2004": "ley_0906_2004",
+            "cpp": "ley_0906_2004",
             "ley 100": "ley_100",
             "ley 100 de 1993": "ley_100",
-            "ley100": "ley_100",
             "ley 80": "ley_80",
             "ley 80 de 1993": "ley_80",
-            "ley80": "ley_80",
         }
         key = aliases.get(doc_name.lower().strip())
         if not key:
             # Fuzzy: match by lowercased name
-            for slug, _doc in ALL_DOCUMENTS_V13:
+            for slug, _doc in corpus:
                 if doc_name.lower() in slug.lower() or slug.lower() in doc_name.lower():
                     key = slug
                     break
         if not key:
             return None
-        for slug, doc in ALL_DOCUMENTS_V13:
+        for slug, doc in corpus:
             if slug != key:
                 continue
             # Find article by number

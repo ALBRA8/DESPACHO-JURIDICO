@@ -162,26 +162,21 @@ def test_vigency_uncertain_when_document_not_found():
     assert result.status == "uncertain"
 
 
-# ===== 5. ContradictionDetector: conflicto sintético explícito =====
+# ===== 5. ContradictionDetector: modificación detectada (sintético) =====
+# V8.0 Fase 2.2: renamed from 'test_contradiction_explicit_conflict_synthetic'
+# which was misleading (HALLAZGO 5) — this test never verified explicit_conflict.
 
-def test_contradiction_explicit_conflict_synthetic():
-    """Detector debe identificar una relación de modificación (no conflicto).
-
-    Nota: el detector es conservador — no infiere conflictos automáticamente.
-    Una 'modificación por' se clasifica como 'modification', no 'explicit_conflict'.
-    El 'explicit_conflict' requiere evidencia textual directa de oposición,
-    que es muy rara en texto legal estatutario.
-    """
+def test_contradiction_modification_detected_synthetic():
+    """Detector debe identificar una relación de modificación cuando
+    un artículo contiene 'modificado por'."""
     detector = ContradictionDetector()
-    # Two articles where one references "modificado por"
     citations = [
         {"document": "ley_x", "article": "10", "article_text": "Texto original de la norma."},
         {"document": "ley_x", "article": "15",
          "article_text": "Artículo modificado por el artículo 5 de la Ley 100 de 1993. Nuevo texto."},
     ]
     results = detector.detect(citations)
-    assert len(results) == 1  # one pair
-    # The detector should classify as "modification" (not explicit_conflict)
+    assert len(results) == 1
     assert results[0].relation == "modification"
 
 
@@ -358,28 +353,148 @@ def test_lawyer_exam_step_7_uses_adversarial_validation():
 
 
 # ===== 12. LawyerExam paso 7 bloquea con norma derogada =====
+# V8.0 Fase 2.2: corregido para demostrar que el bloqueo procede de
+# AdversarialValidator, no de MockProvider.
+
+from albra.llm.providers import LLMProvider, LLMResponse
+
+
+class _StubLLMProvider(LLMProvider):
+    """Test-only stub provider: is_mock=False, is_external=True.
+
+    Returns deterministic LLMResponse objects without making real HTTP
+    calls. This allows the RealProviderGuard to accept it as a "real"
+    provider, so the LawyerExam proceeds past the guard check. The
+    AdversarialValidator (not the guard) is then the only thing that
+    can block the case at step 7.
+
+    This is a test fixture — NOT used in production code.
+    """
+
+    name = "stub"
+    default_model = "stub-1.0"
+    is_mock = False
+    is_external = True
+
+    def __init__(self) -> None:
+        super().__init__(api_key="stub-test-key-not-real", default_model="stub-1.0")
+
+    def generate(self, prompt: str, *, model: str | None = None, max_tokens: int = 1000,
+                 temperature: float = 0.7, **kwargs) -> LLMResponse:
+        return LLMResponse(
+            text="Respuesta determinista del stub provider para pruebas.",
+            provider=self.name,
+            model=model or self.default_model,
+            metadata={"is_mock": False, "is_external": True, "stub": True},
+        )
+
+    def chat(self, messages: list[dict[str, str]], *, model: str | None = None,
+             max_tokens: int = 1000, temperature: float = 0.7, **kwargs) -> LLMResponse:
+        return self.generate("chat prompt", model=model, max_tokens=max_tokens,
+                             temperature=temperature)
+
+    def health_check(self) -> dict:
+        return {"provider": self.name, "available": True, "is_mock": False,
+                "is_external": True, "stub": True}
+
+
+def _find_cst_derogated_article():
+    """Find a real CST article with 'derogado por' in V1.4 corpus."""
+    from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import ALL_DOCUMENTS_V14
+    cst_doc = next(d for s, d in ALL_DOCUMENTS_V14 if s == "codigo_sustantivo_trabajo")
+    for a in cst_doc["articles"]:
+        if "derogado por" in a["text"].lower():
+            return a["number"]
+    return None
+
 
 def test_lawyer_exam_step_7_blocks_on_superseded_norm():
-    """Si el caso cita una norma derogada (synthetic), el paso 7
-    debe BLOQUEAR por validación adversarial (no por Mock)."""
-    # Build a case that cites a synthetic derogated norm
+    """V8.0 Fase 2.2: demuestra que el BLOQUEO procede de
+    AdversarialValidator, no del proveedor.
+
+    Usa _StubLLMProvider (is_mock=False, is_external=True) para que
+    RealProviderGuard lo acepte como proveedor real. El caso alcanza
+    paso 7 donde AdversarialValidator detecta 'superseded_norm'
+    (CST art. con 'derogado por') con severity 'blocking' → BLOCKED.
+    """
+    derogated_art = _find_cst_derogated_article()
+    if not derogated_art:
+        pytest.skip("No CST article with 'derogado por' found")
+
     case = {
-        "summary": "test with derogated norm",
+        "summary": "test with derogated CST article",
         "facts": ["fact"],
         "legal_issues": ["issue"],
         "required_sources": [
-            {"document": "fake_derogated", "article": "1"},
+            {"document": "codigo_sustantivo_trabajo", "article": derogated_art},
         ],
         "document_type": "test",
     }
-    mock = MockProvider()
-    guard = RealProviderGuard(provider=mock, role="lawyer")
-    exam = LawyerExam(case_id="test-derogated", case_facts=case, guard=guard)
-    # The LawyerExam._lookup_in_corpus won't find "fake_derogated" in V1.4,
-    # so it will ABSTAIN at step 5 (no sources in corpus), not BLOCK at 7.
+    # Use StubLLMProvider — NOT MockProvider. The guard accepts it
+    # as real (is_mock=False, is_external=True), so the only thing
+    # that can block at step 7 is the AdversarialValidator.
+    stub = _StubLLMProvider()
+    guard = RealProviderGuard(provider=stub, role="lawyer")
+    assert guard.is_real(), "StubLLMProvider must be accepted as real by the guard"
+
+    exam = LawyerExam(case_id="test-derogated-stub", case_facts=case, guard=guard)
     result = exam.run()
-    # Since the fake document isn't in the corpus, step 5 abstains.
-    assert result.overall_status == "ABSTAINED"
+
+    # The case must be BLOCKED — and the reason must be adversarial
+    # validation, NOT "Real provider required" (which would mean Mock
+    # blocked it).
+    assert result.overall_status == "BLOCKED"
+    assert "validación adversarial" in result.overall_reason.lower(), (
+        f"Blocking must come from AdversarialValidator, not Mock. "
+        f"Got reason: {result.overall_reason!r}"
+    )
+    # Verify step 7 was reached and blocked
+    step7 = next((s for s in result.steps if s.step_number == 7), None)
+    assert step7 is not None, "Step 7 must be reached"
+    assert step7.status == "blocked"
+    assert "defecto" in step7.summary.lower()
+
+
+def test_lawyer_exam_step_7_proceeds_with_clean_article_and_stub():
+    """V8.0 Fase 2.2: prueba complementaria — con el mismo StubLLMProvider
+    pero citando artículos SIN marcadores de modificación/derogación, el
+    caso NO bloquea en paso 7. Esto prueba que el StubLLMProvider por sí
+    solo no bloquea — si el caso con 'derogado por' bloquea, es por el
+    AdversarialValidator.
+
+    Usa Constitución arts. 28/29/30 (vigent, sin marcadores).
+    """
+    case = {
+        "summary": "clean case — no derogated articles",
+        "facts": ["fact"],
+        "legal_issues": ["issue"],
+        "required_sources": [
+            {"document": "constitucion", "article": "28"},
+            {"document": "constitucion", "article": "29"},
+            {"document": "constitucion", "article": "30"},
+        ],
+        "document_type": "test",
+    }
+    stub = _StubLLMProvider()
+    guard = RealProviderGuard(provider=stub, role="lawyer")
+    exam = LawyerExam(case_id="test-clean-stub", case_facts=case, guard=guard)
+    result = exam.run()
+
+    # With StubLLMProvider + clean articles, the case should NOT be
+    # BLOCKED by the guard. It should proceed past step 7. The overall
+    # status should be SUCCESS (all 12 steps completed with stub
+    # responses; step 9 abstained but that doesn't block).
+    assert result.overall_status != "BLOCKED", (
+        f"With StubLLMProvider + clean articles, the case should NOT be "
+        f"BLOCKED. Got: {result.overall_status}. Reason: {result.overall_reason!r}"
+    )
+    # Step 7 must have been reached and passed (not blocked)
+    step7 = next((s for s in result.steps if s.step_number == 7), None)
+    assert step7 is not None, "Step 7 must be reached"
+    assert step7.status == "ok", (
+        f"Step 7 should be 'ok' with clean articles + StubProvider. "
+        f"Got: {step7.status}"
+    )
 
 
 # ===== 13. Regresión: caso piloto V7.0 con Mock =====
@@ -415,3 +530,212 @@ def test_pilot_case_regression_with_mock():
     step9 = next((s for s in result.steps if s.step_number == 9), None)
     if step9:
         assert step9.status == "abstained"
+
+
+# ===== V8.0 Fase 2.2 — Tests nuevos =====
+
+# ===== 14. VigencyChecker: "adicionado por" detectado como modified =====
+
+def test_vigency_adicionado_por_detected():
+    """V8.0 Fase 2.2 (HALLAZGO 3): 'adicionado por' debe clasificarse
+    como 'modified' (el artículo fue ampliado, sigue vigente)."""
+    checker = VigencyChecker()
+    doc = {"status": "vigente", "effective_until": None}
+    article = {
+        "number": "1",
+        "text": "INTEGRACIÓN. Artículo adicionado por el artículo 11 de la Ley 1826 de 2017. Rige a partir del 12 de julio de 2017.",
+    }
+    result = checker.check(document=doc, article=article)
+    assert result.status == "modified"
+    assert "adicionado por" in result.reason.lower()
+    assert result.evidence_source == "article_text_marker"
+
+
+# ===== 15. VigencyChecker: "subrogado por" detectado como modified =====
+
+def test_vigency_subrogado_por_detected():
+    """V8.0 Fase 2.2 (HALLAZGO 3): 'subrogado por' debe clasificarse
+    como 'modified' (el artículo fue reemplazado por nueva disposición)."""
+    checker = VigencyChecker()
+    doc = {"status": "vigente", "effective_until": None}
+    article = {
+        "number": "5",
+        "text": "ELEMENTOS ESENCIALES. Artículo subrogado por el PRESUNCIÓN. Texto del nuevo artículo.",
+    }
+    result = checker.check(document=doc, article=article)
+    assert result.status == "modified"
+    assert "subrogado por" in result.reason.lower()
+    assert result.evidence_source == "article_text_marker"
+
+
+# ===== 16. Consistencia VigencyChecker vs ContradictionDetector =====
+
+def test_consistency_vigency_vs_contradiction_modified():
+    """V8.0 Fase 2.2 (HALLAZGO 2): un artículo con 'modificado por' debe
+    clasificarse consistentemente como 'modified' por VigencyChecker Y
+    como 'modification' por ContradictionDetector."""
+    text = "Artículo modificado por el artículo 20 del Acto Legislativo 2 de 2015. Texto actual."
+    # VigencyChecker
+    vc = VigencyChecker()
+    vr = vc.check(document={"status": "vigente", "effective_until": None},
+                  article={"number": "25", "text": text})
+    assert vr.status == "modified"
+    # ContradictionDetector — needs a pair
+    cd = ContradictionDetector()
+    citations = [
+        {"document": "constitucion", "article": "28", "article_text": "Libertad personal."},
+        {"document": "constitucion", "article": "25", "article_text": text},
+    ]
+    results = cd.detect(citations)
+    # The pair (28, 25) should be "modification" because art. 25 has
+    # "modificado por" marker — SAME classification as VigencyChecker.
+    pair = next(r for r in results if "25" in r.citation_b or "25" in r.citation_a)
+    assert pair.relation == "modification", (
+        f"Inconsistency: VigencyChecker says 'modified' but ContradictionDetector "
+        f"says '{pair.relation}'. Expected 'modification' for consistency."
+    )
+
+
+# ===== 17. ContradictionDetector: "adicionado por" como modification =====
+
+def test_contradiction_adicionado_por_as_modification():
+    """V8.0 Fase 2.2: un artículo con 'adicionado por' debe clasificarse
+    como 'modification' (no como contradicción ni not_determinable)."""
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "ley_x", "article": "10", "article_text": "Texto original."},
+        {"document": "ley_x", "article": "20",
+         "article_text": "Artículo adicionado por el artículo 5 de la Ley 1826 de 2017."},
+    ]
+    results = detector.detect(citations)
+    assert results[0].relation == "modification"
+
+
+# ===== 18. ContradictionDetector: "subrogado por" como modification =====
+
+def test_contradiction_subrogado_por_as_modification():
+    """V8.0 Fase 2.2: un artículo con 'subrogado por' debe clasificarse
+    como 'modification'."""
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "cst", "article": "10", "article_text": "Texto original."},
+        {"document": "cst", "article": "5",
+         "article_text": "Artículo subrogado por el nuevo texto de PRESUNCIÓN."},
+    ]
+    results = detector.detect(citations)
+    assert results[0].relation == "modification"
+
+
+# ===== 19. explicit_conflict: detección con cross-reference sintética =====
+
+def test_explicit_conflict_detected_with_cross_reference():
+    """V8.0 Fase 2.2: _check_explicit_conflict_markers() debe detectar
+    un conflicto explícito cuando un artículo referencia al OTRO
+    artículo citado como incompatible.
+
+    Condición positiva: art. A dice "incompatible con el artículo B"
+    Y art. B está en la lista de citas → explicit_conflict.
+    """
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "ley_x", "article": "10",
+         "article_text": "La licencia de que habla este artículo es incompatible con el artículo 15 de esta ley."},
+        {"document": "ley_x", "article": "15",
+         "article_text": "Licencia de calamidad doméstica."},
+    ]
+    results = detector.detect(citations)
+    assert len(results) == 1
+    assert results[0].relation == "explicit_conflict", (
+        f"Expected explicit_conflict, got {results[0].relation}. "
+        f"Detail: {results[0].detail}"
+    )
+    assert "incompatible" in results[0].detail.lower()
+
+
+# ===== 20. explicit_conflict: NO se activa con "no obstante" =====
+
+def test_explicit_conflict_not_triggered_by_no_obstante():
+    """V8.0 Fase 2.2: 'no obstante' crea una EXCEPCIÓN, no una
+    contradicción. No debe activar explicit_conflict."""
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "ley_x", "article": "10",
+         "article_text": "No obstante lo dispuesto en el artículo 15, el juez podrá..."},
+        {"document": "ley_x", "article": "15",
+         "article_text": "Regla general."},
+    ]
+    results = detector.detect(citations)
+    assert results[0].relation != "explicit_conflict"
+
+
+# ===== 21. explicit_conflict: NO se activa con "sin perjuicio de" =====
+
+def test_explicit_conflict_not_triggered_by_sin_perjuicio():
+    """V8.0 Fase 2.2: 'sin perjuicio de' indica concurrencia,
+    no contradicción."""
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "ley_x", "article": "10",
+         "article_text": "Sin perjuicio de lo dispuesto en el artículo 15, el trabajador podrá..."},
+        {"document": "ley_x", "article": "15",
+         "article_text": "Derecho general."},
+    ]
+    results = detector.detect(citations)
+    assert results[0].relation != "explicit_conflict"
+
+
+# ===== 22. explicit_conflict: NO se activa sin cross-reference al otro artículo =====
+
+def test_explicit_conflict_not_triggered_without_cross_reference():
+    """V8.0 Fase 2.2: 'incompatible con el artículo 99' NO debe activar
+    explicit_conflict cuando el otro artículo citado es el 15 (no el 99).
+    El cross-reference debe coincidir con el artículo citado."""
+    detector = ContradictionDetector()
+    citations = [
+        {"document": "ley_x", "article": "10",
+         "article_text": "Incompatible con el artículo 99 de esta ley."},
+        {"document": "ley_x", "article": "15",
+         "article_text": "Otra norma."},
+    ]
+    results = detector.detect(citations)
+    assert results[0].relation != "explicit_conflict"
+
+
+# ===== 23. VigencyChecker: "adicionado por" en corpus real (CPP) =====
+
+def test_vigency_adicionado_por_from_real_corpus():
+    """V8.0 Fase 2.2: CPP tiene 29 artículos con 'adicionado por'.
+    Verificar que el checker los detecta."""
+    from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import ALL_DOCUMENTS_V14
+    checker = VigencyChecker()
+    doc = next(d for s, d in ALL_DOCUMENTS_V14 if s == "ley_0906_2004")
+    found = False
+    for art in doc["articles"]:
+        if "adicionado por" in art["text"].lower():
+            result = checker.check(document=doc, article=art)
+            assert result.status == "modified", (
+                f"CPP art. {art['number']} has 'adicionado por' but got {result.status}"
+            )
+            found = True
+            break
+    assert found, "Expected at least one CPP article with 'adicionado por'"
+
+
+# ===== 24. VigencyChecker: "subrogado por" en corpus real (CST) =====
+
+def test_vigency_subrogado_por_from_real_corpus():
+    """V8.0 Fase 2.2: CST tiene 5 artículos con 'subrogado por'.
+    Verificar que el checker los detecta."""
+    from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import ALL_DOCUMENTS_V14
+    checker = VigencyChecker()
+    doc = next(d for s, d in ALL_DOCUMENTS_V14 if s == "codigo_sustantivo_trabajo")
+    found = False
+    for art in doc["articles"]:
+        if "subrogado por" in art["text"].lower():
+            result = checker.check(document=doc, article=art)
+            assert result.status == "modified", (
+                f"CST art. {art['number']} has 'subrogado por' but got {result.status}"
+            )
+            found = True
+            break
+    assert found, "Expected at least one CST article with 'subrogado por'"

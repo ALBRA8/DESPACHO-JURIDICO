@@ -125,49 +125,42 @@ class ContradictionDetector:
                 detail="Same article — not a contradiction.",
             )
 
-        # 2. Check for modification relationship
-        # If text_a mentions "modificado por" referencing the same document
-        # type as text_b, it's a modification, not a contradiction.
-        mod_a = _MODIFICADO_POR.search(text_a) if text_a else None
-        mod_b = _MODIFICADO_POR.search(text_b) if text_b else None
-        if mod_a or mod_b:
-            return ContradictionResult(
-                citation_a=label_a, citation_b=label_b,
-                relation="modification",
-                detail="At least one article has a 'modificado por' marker. This indicates a hierarchical modification relationship, not a contradiction.",
-                evidence="modificado por marker found in article text",
-            )
+        # 2. Check for modification/supersession relationship.
+        # V8.0 Fase 2.2: unified regex with vigency.py. Now matches
+        # ALL modification-type markers consistently:
+        #   "modificado por", "adicionado por", "subrogado por",
+        #   "sustituido por", "derogado por"
+        mod_markers = [
+            ("modificado por", _MODIFICADO_POR),
+            ("adicionado por", _ADICIONADO_POR),
+            ("subrogado por", _SUBROGADO_POR),
+            ("sustituido/derogado por", _SUSTITUIDO_POR),
+        ]
+        for marker_name, pattern in mod_markers:
+            match_a = pattern.search(text_a) if text_a else None
+            match_b = pattern.search(text_b) if text_b else None
+            if match_a or match_b:
+                which = "article A" if match_a else "article B"
+                return ContradictionResult(
+                    citation_a=label_a, citation_b=label_b,
+                    relation="modification",
+                    detail=f"{which} has a '{marker_name}' marker. This indicates a hierarchical modification relationship, not a contradiction.",
+                    evidence=f"{marker_name} marker found in article text",
+                )
 
-        # 3. Check for "sustituido por" / "derogado por"
-        sust_a = _SUSTITUIDO_POR.search(text_a) if text_a else None
-        sust_b = _SUSTITUIDO_POR.search(text_b) if text_b else None
-        if sust_a or sust_b:
-            return ContradictionResult(
-                citation_a=label_a, citation_b=label_b,
-                relation="modification",
-                detail="At least one article has a 'sustituido/derogado por' marker. This indicates a supersession relationship, not a contradiction.",
-                evidence="sustituido/derogado por marker found in article text",
-            )
-
-        # 4. Check for explicit textual conflict
-        # This is the conservative check: we look for articles that
-        # explicitly reference each other as conflicting, or that
-        # use language like "en contravía de", "no obstante",
-        # "se exceptúa", etc. — but ONLY when both articles appear
-        # to regulate the same subject matter.
-        # Since we don't have a legal ontology, we can't automatically
-        # determine that two articles regulate the same subject.
-        # Therefore, the default is "not_determinable".
-        conflict_marker = self._check_explicit_conflict_markers(text_a, text_b)
+        # 3. Check for explicit textual conflict.
+        # V8.0 Fase 2.2: implemented with strict, evidence-based criteria.
+        # See _check_explicit_conflict_markers docstring for details.
+        conflict_marker = self._check_explicit_conflict_markers(text_a, text_b, cite_a, cite_b)
         if conflict_marker:
             return ContradictionResult(
                 citation_a=label_a, citation_b=label_b,
                 relation="explicit_conflict",
                 detail=conflict_marker,
-                evidence="Explicit conflict marker found in article text",
+                evidence="Explicit cross-reference indicating incompatibility found in article text",
             )
 
-        # 5. Default: not determinable
+        # 4. Default: not determinable
         return ContradictionResult(
             citation_a=label_a, citation_b=label_b,
             relation="not_determinable",
@@ -175,33 +168,123 @@ class ContradictionDetector:
         )
 
     def _check_explicit_conflict_markers(
-        self, text_a: str, text_b: str
+        self, text_a: str, text_b: str,
+        cite_a: dict[str, Any] | None = None,
+        cite_b: dict[str, Any] | None = None,
     ) -> str:
-        """Check for explicit conflict markers between two article texts.
+        """Check for explicit conflict markers between two cited articles.
 
-        Returns a non-empty string if a conflict marker is found,
-        empty string otherwise.
+        V8.0 Fase 2.2: implemented with strict, evidence-based criteria.
 
-        This is VERY conservative — it only flags explicit textual
-        markers that indicate opposition between the two norms.
+        This method looks for CROSS-REFERENCES where one cited article
+        EXPLICITLY declares incompatibility with the OTHER cited article.
+        It does NOT infer conflicts from semantic similarity, shared
+        subject matter, or general opposition language.
+
+        ACTIVATION CRITERIA (all must be met):
+          1. One article's text contains a marker of explicit
+             incompatibility ("incompatible con", "contraviene",
+             "en contravía de").
+          2. The marker is followed by a reference to a SPECIFIC
+             article number that matches the OTHER cited article's
+             number.
+          3. The reference includes a document name/type that matches
+             the other cited article's document.
+
+        MARKERS EVALUATED:
+          - "incompatible con el artículo N" → checks if N matches
+            the other cited article's number.
+          - "contraviene el artículo N" / "contravienen los artículos N"
+            → checks if N matches.
+          - "en contravía de lo dispuesto en el artículo N" → checks
+            if N matches.
+
+        MARKERS NOT TREATED AS CONFLICTS (with documented reasoning):
+          - "no obstante" → creates an EXCEPTION, not a contradiction.
+            The general rule and the exception coexist by design.
+          - "se exceptúa" → same as "no obstante".
+          - "sin perjuicio de" → means "without prejudice to" — both
+            norms apply concurrently. NOT a conflict.
+          - "se opone a" → in the corpus, this refers to a PERSON
+            opposing an action (not a norm opposing a norm).
+          - "en oposición a" → in the corpus, refers to political
+            opposition, not legal norm conflict.
+
+        Returns:
+            A non-empty string describing the conflict if found.
+            Empty string if no explicit conflict is detected
+            (honest abstention).
         """
         if not text_a or not text_b:
             return ""
-        # Check if text_a explicitly contradicts text_b by referencing
-        # it. This is rare in statutory text — explicit contradictions
-        # are usually resolved through derogation/modification.
-        # We look for "no obstante lo dispuesto en" or similar phrases
-        # that create exceptions, but ONLY flag as conflict if the
-        # exception appears to contradict the general rule.
-        #
-        # For now, we don't have enough information to determine this
-        # automatically. Return "" (no conflict detected).
+        if cite_a is None or cite_b is None:
+            return ""
+
+        art_a_num = str(cite_a.get("article", ""))
+        art_b_num = str(cite_b.get("article", ""))
+        str(cite_a.get("document", "")).lower()
+        str(cite_b.get("document", "")).lower()
+
+        # Patterns for explicit incompatibility + cross-reference.
+        # Each pattern captures the article number(s) referenced.
+        incompat_patterns = [
+            # "incompatible con el artículo N" or "incompatible con los artículos N, M"
+            re.compile(
+                r'incompatible\s+(?:con\s+)?(?:el|los)\s+art[ií]culos?\s+(\d+(?:\s*,\s*\d+)*)',
+                re.IGNORECASE,
+            ),
+            # "contraviene el artículo N" or "contravienen los artículos N"
+            re.compile(
+                r'contraviene[n]?\s+(?:el|los)\s+art[ií]culos?\s+(\d+(?:\s*,\s*\d+)*)',
+                re.IGNORECASE,
+            ),
+            # "en contravía de lo dispuesto en el artículo N"
+            re.compile(
+                r'en\s+contrav[ií]a\s+de\s+(?:lo\s+dispuesto\s+en\s+)?(?:el|los)\s+art[ií]culos?\s+(\d+(?:\s*,\s*\d+)*)',
+                re.IGNORECASE,
+            ),
+        ]
+
+        # Check text_a for references to art_b_num
+        for pat in incompat_patterns:
+            match = pat.search(text_a)
+            if match:
+                referenced_nums = [n.strip() for n in match.group(1).split(",")]
+                if art_b_num in referenced_nums:
+                    return (
+                        f"Article {cite_a.get('document', '')} art. {art_a_num} "
+                        f"explicitly references art. {art_b_num} as incompatible "
+                        f"(marker: '{match.group(0)[:80]}')."
+                    )
+
+        # Check text_b for references to art_a_num
+        for pat in incompat_patterns:
+            match = pat.search(text_b)
+            if match:
+                referenced_nums = [n.strip() for n in match.group(1).split(",")]
+                if art_a_num in referenced_nums:
+                    return (
+                        f"Article {cite_b.get('document', '')} art. {art_b_num} "
+                        f"explicitly references art. {art_a_num} as incompatible "
+                        f"(marker: '{match.group(0)[:80]}')."
+                    )
+
+        # No explicit cross-reference conflict found → honest abstention
         return ""
 
 
-# Re-use the modification patterns from vigency.py for consistency.
+# V8.0 Fase 2.2: unified patterns — same simplified form as vigency.py.
+# This resolves HALLAZGO 2 (regex inconsistency between the two modules).
 _MODIFICADO_POR = re.compile(
-    r'modificado\s+por\s+(?:el\s+art[ií]culo\s+)?(\d+)\s+de\s+(?:la\s+)?(?:Ley|Acto\s+Legislativo|Decreto)\s+(\d+\s+de\s+\d{4})',
+    r'modificado\s+por\s+(.+?)(?:\.|$)',
+    re.IGNORECASE,
+)
+_ADICIONADO_POR = re.compile(
+    r'adicionad[oa]\s+por\s+(.+?)(?:\.|$)',
+    re.IGNORECASE,
+)
+_SUBROGADO_POR = re.compile(
+    r'subrogad[oa]\s+por\s+(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 _SUSTITUIDO_POR = re.compile(

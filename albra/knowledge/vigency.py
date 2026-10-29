@@ -54,13 +54,26 @@ class VigencyResult:
 
 
 # ===== Patterns for vigency markers in article text =====
+# V8.0 Fase 2.2: unified patterns shared with contradiction.py.
+# All patterns use the simplified form: match the marker + capture
+# the reference text (any chars until period or end). This ensures
+# consistency between vigency.py and contradiction.py.
 
-# "modificado por" — detect modification markers. We only need the
-# marker itself to know the article has been modified; the exact
-# reference (which law/article) is extracted for the reason text
-# but is not required for classification.
+# "modificado por" — the article text has been amended by another norm.
 _MODIFICADO_POR = re.compile(
     r'modificado\s+por\s+(.+?)(?:\.|$)',
+    re.IGNORECASE,
+)
+# "adicionado por" — a new paragraph/subsection was added to the article.
+# V8.0 Fase 2.2 (HALLAZGO 3): previously undetected, 30 occurrences in corpus.
+_ADICIONADO_POR = re.compile(
+    r'adicionad[oa]\s+por\s+(.+?)(?:\.|$)',
+    re.IGNORECASE,
+)
+# "subrogado por" — the article was replaced by a new provision.
+# V8.0 Fase 2.2 (HALLAZGO 3): previously undetected, 5 occurrences in CST.
+_SUBROGADO_POR = re.compile(
+    r'subrogad[oa]\s+por\s+(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "derogado por" — explicit derogation
@@ -191,10 +204,38 @@ class VigencyChecker:
                 evidence_source="article_text_marker",
             )
 
+        # V8.0 Fase 2.2 (HALLAZGO 3): "adicionado por" — an addition was
+        # made to the article. This is a modification-type relationship:
+        # the article is still vigent but its text has been expanded.
+        adic_match = _ADICIONADO_POR.search(article_text)
+        if adic_match:
+            ref_text = adic_match.group(1).strip()[:200]
+            return VigencyResult(
+                status="modified",
+                superseded_by=ref_text,
+                reason=f"Article text contains 'adicionado por' marker referencing {ref_text}.",
+                evidence_source="article_text_marker",
+            )
+
+        # V8.0 Fase 2.2 (HALLAZGO 3): "subrogado por" — the article was
+        # replaced by a new provision. Treated as "modified" (not
+        # "superseded") because the original article text is still
+        # present in the corpus and the subrogation is noted as a
+        # modification, similar to "sustituido por".
+        subr_match = _SUBROGADO_POR.search(article_text)
+        if subr_match:
+            ref_text = subr_match.group(1).strip()[:200]
+            return VigencyResult(
+                status="modified",
+                superseded_by=ref_text,
+                reason=f"Article text contains 'subrogado por' marker referencing {ref_text}.",
+                evidence_source="article_text_marker",
+            )
+
         # No markers found → vigent (based on document status + absence of modification markers)
         return VigencyResult(
             status="vigent",
-            reason="Document status is 'vigente'. No modification/derogation/sustitution markers found in article text.",
+            reason="Document status is 'vigente'. No modification/derogation/sustitution/adicion/subrogation markers found in article text.",
             evidence_source="document_metadata",
         )
 
