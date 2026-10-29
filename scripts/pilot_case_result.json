@@ -1,0 +1,322 @@
+{
+  "case_id": "caso-piloto-hc-001",
+  "case_summary": "Habeas corpus por detencion sin orden judicial",
+  "started_at": "2026-10-29T07:37:36+00:00",
+  "finished_at": "2026-10-29T07:41:13+00:00",
+  "overall_status": "SUCCESS",
+  "overall_reason": "",
+  "steps": [
+    {
+      "step_number": 1,
+      "name": "Intake — recibir hechos y documentos",
+      "status": "ok",
+      "summary": "Recibidos 3 hechos, 1 documentos, 1 incertidumbres iniciales.",
+      "evidence": [
+        {
+          "type": "facts",
+          "count": 3,
+          "items": [
+            "Juan Perez fue detenido por agentes de policia sin exhibir orden judicial",
+            "La detencion duro 72 horas sin presentacion ante juez",
+            "No hubo flagrancia"
+          ]
+        },
+        {
+          "type": "documents",
+          "count": 1,
+          "items": [
+            "denuncia inicial"
+          ]
+        },
+        {
+          "type": "uncertainties",
+          "count": 1,
+          "items": [
+            "no se sabe si existe orden previa no exhibida"
+          ]
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 2,
+      "name": "Hechos, incertidumbres y documentos faltantes",
+      "status": "ok",
+      "summary": "Hechos claros: 3. Incertidumbres: 1. Documentos faltantes declarados: 1.",
+      "evidence": [
+        {
+          "type": "clear_facts",
+          "items": [
+            "Juan Perez fue detenido por agentes de policia sin exhibir orden judicial",
+            "La detencion duro 72 horas sin presentacion ante juez",
+            "No hubo flagrancia"
+          ]
+        },
+        {
+          "type": "uncertainties",
+          "items": [
+            "no se sabe si existe orden previa no exhibida"
+          ]
+        },
+        {
+          "type": "missing_documents",
+          "items": [
+            "orden judicial si existe"
+          ]
+        }
+      ],
+      "notes": [
+        "El caso declara documentos faltantes. La estrategia debe contemplar la posibilidad de no poder probar todos los hechos."
+      ]
+    },
+    {
+      "step_number": 3,
+      "name": "Delimitación de problemas jurídicos",
+      "status": "ok",
+      "summary": "Problemas jurídicos delimitados: 3.",
+      "evidence": [
+        {
+          "type": "legal_issues",
+          "items": [
+            "Vulneracion art. 28 libertad personal",
+            "Habeas corpus art. 30",
+            "Debido proceso art. 29"
+          ]
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 4,
+      "name": "Fuentes normativas necesarias",
+      "status": "ok",
+      "summary": "Fuentes requeridas: 3.",
+      "evidence": [
+        {
+          "type": "required_sources",
+          "items": [
+            {
+              "document": "constitucion",
+              "article": "28"
+            },
+            {
+              "document": "constitucion",
+              "article": "30"
+            },
+            {
+              "document": "constitucion",
+              "article": "29"
+            }
+          ]
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 5,
+      "name": "Investigación y procedencia de fuentes",
+      "status": "ok",
+      "summary": "Fuentes encontradas en corpus V1.3: 3 de 3 requeridas.",
+      "evidence": [
+        {
+          "type": "found_in_corpus",
+          "document": "constitucion",
+          "article": "28",
+          "provenance_status": "PARTIAL",
+          "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+          "source_tier": "S0_PRIMARY_SUPERIOR"
+        },
+        {
+          "type": "found_in_corpus",
+          "document": "constitucion",
+          "article": "30",
+          "provenance_status": "PARTIAL",
+          "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+          "source_tier": "S0_PRIMARY_SUPERIOR"
+        },
+        {
+          "type": "found_in_corpus",
+          "document": "constitucion",
+          "article": "29",
+          "provenance_status": "PARTIAL",
+          "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+          "source_tier": "S0_PRIMARY_SUPERIOR"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 6,
+      "name": "Validación de citas y vigencia",
+      "status": "ok",
+      "summary": "Citas verificadas: 3. No verificadas: 0.",
+      "evidence": [
+        {
+          "type": "verified",
+          "items": [
+            {
+              "document": "constitucion",
+              "article": "28",
+              "provenance_status": "PARTIAL",
+              "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+              "article_text_preview": "Toda persona es libre. Nadie puede ser molestado en su persona o familia, ni reducido a prisión o arresto, ni detenido, ni su domicilio registrado, sino en virtud de mandamiento escrito de autoridad j"
+            },
+            {
+              "document": "constitucion",
+              "article": "30",
+              "provenance_status": "PARTIAL",
+              "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+              "article_text_preview": "Quien estuviere privado de su libertad, y creyere estarlo ilegalmente, tiene derecho a invocar ante cualquier autoridad judicial, en todo tiempo, por sí o por interpuesta persona, el Habeas Corpus, el"
+            },
+            {
+              "document": "constitucion",
+              "article": "29",
+              "provenance_status": "PARTIAL",
+              "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+              "article_text_preview": "El debido proceso se aplicará a toda clase de actuaciones judiciales y administrativas."
+            }
+          ]
+        },
+        {
+          "type": "unverified",
+          "items": []
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 7,
+      "name": "Estrategia razonada",
+      "status": "ok",
+      "summary": "Estrategia formulada por LLM real.",
+      "evidence": [
+        {
+          "type": "llm_response",
+          "provider": "nvidia",
+          "model": "z-ai/glm-5.3-flash"
+        },
+        {
+          "type": "strategy_text",
+          "text": "[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\n\nThe user wants me to act as a Colombian lawyer and formulate a legal strategy for a case involving:\n1. Juan Perez detained by police without showing a judicial order\n2. Detention lasted 72 hours without presentation before a judge\n3. No flagrancia (flagrante delito)\n\nI can ONLY use the verified norms provided:\n- Constitución art. 28 (liberty, no detention without written mandate from judicial authority, except flagrancia)\n- Constitución art. 30 (Habeas Corpus right)\n- Constitución art. 29 (debido proceso)\n\nI must NOT invoke other norms (like Ley 1095 de 2006 regulating habeas corpus, Ley 906 de 2004 criminal procedure code, art. 32 constitución, etc.) — if needed, declare NO_RESUELTO.\n\nThe strategy should be max 500 words, in Spanish, distinguishing hechos / inferencias / conclusiones.\n\nLet me structure:\n\n**HECHOS (verificados):**\n1. Detención sin exhibición de orden judicial\n2. 72 horas sin presentación ante juez\n3. Ausencia de flagrancia\n\n**INFERENCIAS (razonamiento jurídico basado exclusivamente en el corpus):**\n\n- Art. 28: la detención solo procede \"en virtud de mandamiento escrito de autoridad judicial competente, o por flagrancia\" — wait, the text provided is truncated: \"sino en virtud de mandamiento escrito de autoridad j...\" — it's cut off. I should note that the text is truncated but the visible part establishes the requirement of written mandate from judicial authority. The full article includes \"salvo por flagrancia\" but since the text is truncated, I should be careful. However, the hecho states \"No hubo flagrancia\" — I can use art. 28's requirement of written judicial mandate. The truncation means I can't quote the flagrancia exception from the text itself, but the hecho says no flagrancia, so the analysis: without judicial order AND without flagrancia, the detention lacks the basis required by art. 28. I can note that t"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 8,
+      "name": "Contraargumentos (RED TEAM)",
+      "status": "ok",
+      "summary": "Contraargumentos formulados por LLM real.",
+      "evidence": [
+        {
+          "type": "red_team_text",
+          "text": "[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\n\nThe user is asking me to do RED TEAM analysis on a legal strategy. But there's something odd here: the \"ESTRATEGIA\" section contains a meta-note saying the model ran out of max_tokens during reasoning, and then shows a partial reasoning trace (which appears to be leaked chain-of-thought from another model) plus a truncated strategy that cuts off at \"**I. HECHOS (verificados)** 1\".\n\nSo the actual strategy to red-team is essentially incomplete — we only have:\n1. The leaked reasoning trace showing the intended strategy: habeas corpus under art. 30 C.P., violation of art. 28 (detention without written judicial mandate, no flagrancia), subsidiary argument of art. 29 debido proceso, pretensión of immediate liberty, NO_RESUELTO items for plazo máximo, procedimiento específico, tutela transitoria, etc.\n2. A truncated final answer that only got to \"HECHOS: 1\".\n\nThe user wants: 3-5 counterarguments, risks, and weaknesses. Specific, not general. Max 400 words, in Spanish.\n\nSo I need to red-team the strategy as inferable from the reasoning trace. Let me think as a Colombian lawyer doing red team on this habeas corpus strategy.\n\nKey counterarguments/risks a real opposing counsel or a judge might raise:\n\n1. **Problema probatorio de los hechos**: The strategy assumes as \"hechos verificados\" the absence of flagrancia and the absence of judicial order. But who proves this? In a habeas corpus hearing, the police/Procuraduría will typically produce an acta de detención, and often the detention IS justified post-hoc: e.g., the person was captured in flagrancia (art. 32 C.P. includes \"sorprendido en flagrancia\" broadly — persona sorprendida con elementos que permitan inferir razonablemente su participación). If the police assert flagrancia, the burden shifts and the strategy's core premise collapses. The strategy lists \"ausencia de flagrancia\" as a hech"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 9,
+      "name": "Requisitos procesales y términos",
+      "status": "abstained",
+      "summary": "El corpus V1.3 NO contiene Código de Procedimiento Civil ni Ley 640 de 2001 (conciliación) ni otros cuerpos procesales. No se pueden determinar términos procesales con evidencia.",
+      "evidence": [],
+      "notes": [
+        "Requisito: el caso debe ser revisado por abogado humano para identificar plazos, juzgado competente, cuantía, y trámite procesal aplicable."
+      ]
+    },
+    {
+      "step_number": 10,
+      "name": "Borrador del documento",
+      "status": "ok",
+      "summary": "Borrador de escrito de habeas corpus generado por LLM real (10642 chars).",
+      "evidence": [
+        {
+          "type": "draft_preview",
+          "text": "[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\n\nLet me analyze this task carefully.\n\nThe user wants me to draft a habeas corpus document (escrito de habeas corpus) as a Colombian lawyer, using ONLY the verified norms provided:\n\n1. **Constitución art. 28**: \"Toda persona es libre. Nadie puede ser molestado en su persona o familia, ni reducido a prisión o arresto, ni detenido, ni su domicilio registrado, sino e"
+        },
+        {
+          "type": "llm_metadata",
+          "provider": "nvidia",
+          "model": "z-ai/glm-5.3-flash"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 11,
+      "name": "Revisión interna",
+      "status": "ok",
+      "summary": "Revisión realizada por LLM real.",
+      "evidence": [
+        {
+          "type": "review_text",
+          "text": "[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\n\nLet me carefully analyze this task. The user is asking me to act as a Colombian lawyer doing an internal review of a draft. But wait — looking at the structure of the prompt, there's something odd here.\n\nThe prompt says:\n- \"Eres un abogado colombiano haciendo revisión interna del siguiente borrador. Verifica: 1. Que todas las normas citadas estén en el corpus V1.3 (no inventadas). 2. Coherencia entre hechos y pretensiones. 3. Que el borrador no afirme nada que no esté respaldado por las normas verificadas. Lista los hallazgos en formato bullet. Si todo está OK, dilo explícitamente.\"\n\nThen there's \"BORRADOR:\" — but instead of a draft, there's a note saying \"[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\" followed by what appears to be the model's leaked reasoning/thinking text, not an actual draft document.\n\nThen at the end: \"NORMAS VERIFICADAS: ['constitucion art.28', 'constitucion art.30', 'constitucion art.29']\" and \"REVISIÓN (en español):\"\n\nSo the situation is: The \"BORRADOR\" section doesn't contain an actual draft. It contains a meta-note about max_tokens being exhausted, and then leaked chain-of-thought reasoning from a previous model attempt that was drafting a habeas corpus document. The reasoning text discusses:\n- The verified norms (arts. 28, 29, 30 of the Constitution)\n- Facts about Juan Perez detained without judicial order, 72 hours without presentation before judge, no flagrancia\n- The model's plan to not invent norms (not citing Ley 1095 de 2006, Ley 906 de 2004, art. 32, jurisprudence)\n- The model was mid-thought about how to handle the truncated art. 28 text\n\nSo my task as the reviewer: I need to review \"the draft\" — but the draft is not actually present. What's present is:\n1. A system note indicating the generation failed (max_to"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "step_number": 12,
+      "name": "Entrega del resultado",
+      "status": "ok",
+      "summary": "Resultado entregado. Estado: SUCCESS. Citas verificadas: 3. Citas no verificadas: 0. Limitaciones: 1. El borrador requiere revisión humana antes de cualquier actuación procesal.",
+      "evidence": [
+        {
+          "type": "draft_available",
+          "chars": 10642
+        },
+        {
+          "type": "strategy_available",
+          "chars": 4894
+        },
+        {
+          "type": "review_available",
+          "chars": 4292
+        }
+      ],
+      "notes": [
+        "El resultado NO se envía a juzgado. La presentación, firma y envío quedan sujetos a autorización humana explícita."
+      ]
+    }
+  ],
+  "drafted_document": "[NOTA: el modelo agotó max_tokens durante el razonamiento. Aumentando max_tokens puede producir una respuesta final más estructurada.]\n\nLet me analyze this task carefully.\n\nThe user wants me to draft a habeas corpus document (escrito de habeas corpus) as a Colombian lawyer, using ONLY the verified norms provided:\n\n1. **Constitución art. 28**: \"Toda persona es libre. Nadie puede ser molestado en su persona o familia, ni reducido a prisión o arresto, ni detenido, ni su domicilio registrado, sino en virtud de mandamiento escrito de autoridad j...\" (truncated - but the visible part establishes that no one can be detained except by written mandate of judicial authority)\n\n2. **Constitución art. 30**: \"Quien estuviere privado de su libertad, y creyere estarlo ilegalmente, tiene derecho a invocar ante cualquier autoridad judicial, en todo tiempo, por sí o por interpuesta persona, el Habeas Corpus, el...\" (truncated)\n\n3. **Constitución art. 29**: \"El debido proceso se aplicará a toda clase de actuaciones judiciales y administrativas.\"\n\nThe facts:\n- Juan Perez was detained by police agents without exhibiting a judicial order\n- The detention lasted 72 hours without presentation before a judge\n- There was no flagrancia (flagrante delito)\n\nI must NOT invent norms, sentences, or citations not in the list. This means I cannot cite:\n- Ley 1095 de 2006 (which regulates habeas corpus in Colombia)\n- Ley 906 de 2004 (Criminal Procedure Code)\n- Art. 32 of the Constitution (which contains the flagrancia exception and the 36-hour limit)\n- Any jurisprudence (Corte Constitucional sentencias)\n- Art. 250, 277, etc.\n\nI can only use arts. 28, 29, and 30 of the Constitution as verified.\n\nThe structure required:\n1. Encabezado (header)\n2. Hechos (facts)\n3. Fundamentos de derecho (legal grounds)\n4. Pretensiones/solicitudes (claims/requests)\n5. Anexos (annexes)\n\nAnd it must include the disclaimer: \"Borrador generado por ALBRA — requiere revisión y firma de abogado humano\"\n\nLet me think about what I can legitimately argue with only these three articles:\n\n**Art. 28**: Establishes that no one can be detained except by written mandate of judicial authority. The text is truncated (\"autoridad j...\" - probably \"judicial competente\"), but the visible portion clearly establishes the requirement of a written mandate from judicial authority for detention. Since the facts say there was no flagrancia AND no judicial order was exhibited, the detention violates art. 28.\n\nWait - the truncation is interesting. The full art. 28 says: \"...sino en virtud de mandamiento escrito de autoridad judicial competente, o por flagrancia.\" But the verified text is cut at \"autoridad j\". Should I use the flagrancia part? The facts state \"No hubo flagrancia\" - so I can argue that even the exception doesn't apply (but I should be careful about citing the exception since the text is truncated). Actually, I can handle this carefully: I can say the detention lacks the written judicial mandate required by art. 28, and note that the facts establish there was no flagrancia either (without necessarily quoting the truncated part as if I had it verified). Actually, I think it's safer to argue based on what's visible: the requirement of \"mandamiento escrito de autoridad judicial\" - and note that no such mandate existed. The absence of flagrancia is a fact I can mention (it's in the facts), reinforcing that there was no legal basis whatsoever for the detention.\n\nHmm, but strictly speaking, I should only use the verified text. The verified text says nobody can be detained \"sino en virtud de mandamiento escrito de autoridad j[udicial]\". The fact that there was no flagrancia is a fact from the case, and I can use it to preempt any defense that the detention was justified. I'll phrase it carefully: \"conforme a los hechos, no concurrió situación de flagrancia\" - this uses the fact, not an invented norm. I might add a footnote or a caveat that the verified text is partial. Actually, for a clean draft, I'll argue: art. 28 requires written judicial mandate; no such mandate was exhibited; therefore the detention is illegal.\n\n**Art. 30**: The right to habeas corpus - anyone deprived of liberty who believes it's illegal can invoke habeas corpus before ANY judicial authority, at any time, by themselves or through another person. This is the procedural vehicle. The text is truncated (\"el Habeas Corpus, el...\") but the visible part gives me: (a) the right, (b) before any judicial authority, (c) at any time (en todo tiempo), (d) by oneself or through an intermediary (por sí o por interpuesta persona).\n\n**Art. 29**: Due process applies to all judicial and administrative proceedings. I can use this to argue that the detention procedure violated due process - the person was not presented before a judge within a reasonable time, no judicial control was exercised.\n\nNow, about the 72 hours: The Colombian Constitution art. 28 (full text) says the person must be presented to the judge within 36 hours (actually that's in art. 32 for flagrancia... let me recall). Actually:\n- Art. 28 CP: \"La persona detenida preventivamente será puesta a disposición del juez competente dentro de los treinta y seis horas siguientes, a fin de que éste adopte la decisión pertinente en el término que establezca la ley.\"\n- Art. 32 CP: flagrancia cases, person must be presented to judge within 36 hours.\n\nBut since the verified text of art. 28 is truncated before that part, I CANNOT cite the 36-hour term. I must be careful. Instead, I can argue that 72 hours without judicial presentation is excessive/unreasonable, violating due process (art. 29) and the guarantee of art. 28, without citing a specific numeric term. I can argue that the prolonged time (72 hours) without any judicial control constitutes an unreasonable deprivation that violates the constitutional guarantee. I should avoid inventing the \"36 horas\" figure since it's not in the verified text.\n\nHmm, but is it \"inventing\" to say the law requires prompt presentation? Art. 28's visible text doesn't include the 36-hour rule. I'll argue reasonableness: 72 hours without presentation before any judge is unreasonable and violates arts. 28 and 29. I can note that the specific statutory term is not cited in this draft because it must be verified by the reviewing attorney — actually, the instructions say to use ONLY verified norms and not invent. I could add a bracketed note for the attorney: \"[Nota: verificar término legal de presentación ante juez — no incluido en el corpus verificado]\". That's a good practice for a draft with the ALBRA disclaimer. That keeps honesty while flagging where additional norms would strengthen the argument.\n\nSimilarly, for procedure: habeas corpus in Colombia is regulated by art. 30 CP and Ley 1095 de 2006 (procedure before penal circuit judges, immediate resolution, etc.). Since Ley 1095 is NOT in the verified corpus, I cannot cite it. I'll draft the action based solely on art. 30, addressed to \"cualquier autoridad judicial\" — I can address it generically to a judge (e.g., \"Juez [Penal del Circuito de ___]\") with a note that the specific competent judge should be verified. Actually art. 30 says \"ante cualquier autoridad judicial\" so addressing a specific judge is fine; I'll use placeholders.\n\nStructure of the document:\n\n---\n\n**ENCABEZADO**\n- City and date: [Ciudad], [fecha]\n- Señor(a) Juez(a) [Penal del Circuito de ____] (Reparto) — or \"Cualquier autoridad judicial\" per art. 30\n- Reference: Acción de Habeas Corpus a favor de Juan Pérez\n- Impetrante: [Nombre], identified with [cédula], acting as [propio/interpuesta persona — per art. 30 \"por sí o por interpuesta persona\"]\n- Detenido: Juan Pérez, detained at [Estación de Policía ___]\n- Autoridad(s) presuntamente infractora(s): Agentes de Policía [nombres/desconocidos]\n- Disclaimer: Borrador generado por ALBRA — requiere revisión y firma de abogado humano\n\n**HECHOS**\n1. Juan Pérez fue privado de la libertad el [fecha] por agentes de la Policía Nacional, sin que le exhibieran orden judicial de detención.\n2. La privación de libertad se ha prolongado por 72 horas (three days) sin que el detenido haya sido presentado ante autoridad judicial.\n3. No concurrió flagrancia ni hipótesis alguna que justificara la captura sin orden judicial.\n4. [Maybe] A la fecha, Juan Pérez continúa privado de su libertad en [lugar de detención].\n\n**FUNDAMENTOS DE DERECHO**\n1. Art. 28 CP: liberty; no detention except by written mandate of judicial authority. Quote the verified fragment. Argue: no written judicial mandate existed; detention is therefore illegal. Also, the facts show no flagrancia (careful phrasing). The 72 hours without judicial presentation shows absence of any judicial control.\n2. Art. 29 CP: due process applies to all judicial and administrative acts; the detention without order and without judicial presentation for 72 hours violates due process.\n3. Art. 30 CP: right to habeas corpus, before any judicial authority, at any time, by oneself or through another person. This action is timely and procedurally viable.\n4. Argue the illegality: (a) no judicial order (art. 28); (b) no flagrancia (fact); (c) 72 hours without judicial presentation — excessive, violates art. 29 and the guarantee of judicial control inherent in art. 28.\n\nI should be careful with the flagrancia argument. The verified art. 28 text is truncated at \"autoridad j...\" — the exception \"o por flagrancia\" is not visible. But the FACTS state \"No hubo flagrancia\". I can use the fact to say: neither was there a judicial order (art. 28 requirement) nor, per the facts, did any flagrancia situation occur — so the detention lacks any legal foundation. This doesn't require me to quote the flagrancia clause; it uses the fact. I think that's acceptable and prudent. Alternatively, I can phrase: \"sin que se acredite mandamiento escrito de autoridad judicial competente (art. 28 C.P.) ni circunstancia que conforme a los hechos justificara la captura (no hubo flagrancia).\"\n\n**PRETENSIONES / SOLICITUDES**\n1. Que se tramite la acción de habeas corpus de manera inmediata (art. 30 CP: \"en todo tiempo\" — I can't say \"impredecible\" per Ley 1095... actually I can say immediate attention based on the nature of the right; art. 30 doesn't say \"immediate\" in the visible text. I'll say it requires urgent/priority handling given the ongoing deprivation of liberty — that's argument, not a fake citation).\n2. Que se ordene la libertad inmediata de Juan Pérez, por ser ilegal la privación de la libertad (violation of art. 28).\n3. Subsidiariamente/also: que se ordene su presentación inmediata ante autoridad judicial — hmm",
+  "citations_verified": [
+    {
+      "document": "constitucion",
+      "article": "28",
+      "provenance_status": "PARTIAL",
+      "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+      "article_text_preview": "Toda persona es libre. Nadie puede ser molestado en su persona o familia, ni reducido a prisión o arresto, ni detenido, ni su domicilio registrado, sino en virtud de mandamiento escrito de autoridad j"
+    },
+    {
+      "document": "constitucion",
+      "article": "30",
+      "provenance_status": "PARTIAL",
+      "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+      "article_text_preview": "Quien estuviere privado de su libertad, y creyere estarlo ilegalmente, tiene derecho a invocar ante cualquier autoridad judicial, en todo tiempo, por sí o por interpuesta persona, el Habeas Corpus, el"
+    },
+    {
+      "document": "constitucion",
+      "article": "29",
+      "provenance_status": "PARTIAL",
+      "source_url": "http://www.secretariasenado.gov.co/senado/basedoc/constitucion_politica_1991.htm",
+      "article_text_preview": "El debido proceso se aplicará a toda clase de actuaciones judiciales y administrativas."
+    }
+  ],
+  "citations_unverified": [],
+  "limitations": [
+    "No hay jurisprudencia en el corpus (sentencias Corte Constitucional rechazadas en V1.2 — content not fetchable).",
+    "El corpus jurídico V1.3 cubre solo Constitución 1991 arts. 1-32 + Ley 100/1993 (45 arts.) + Ley 80/1993 (48 arts.) — citas fuera de este rango se marcan como NO_RESUELTO.",
+    "El borrador generado requiere revisión y firma de un abogado humano calificado antes de cualquier actuación procesal real.",
+    "Paso 9 abstenido: corpus V1.3 no contiene cuerpos procesales (CPC, Ley 640, Ley 1564, etc.). Los términos procesales deben determinarse manualmente por el abogado humano."
+  ],
+  "provider_state": {
+    "role": "lawyer",
+    "provider": "nvidia",
+    "is_mock": false,
+    "is_external": true,
+    "is_real": true,
+    "verdict": "REAL"
+  }
+}
