@@ -76,3 +76,50 @@ Reconciliar el commit `1bcf8290d06531cedb94d0638f4b0542991dcaea` con la document
 ### Dictamen
 
 V6.0 — OIDC/OAUTH IDENTITY: VERIFIED. La autenticación OIDC real está implementada, probada (49 tests negativos + integración end-to-end), documentada. Deployment queda separado.
+
+---
+
+## A-V8.0-F2 — Auditoría de validación jurídica V8.0 Fase 2
+
+- **Fecha:** 2026-10-29
+- **Alcance:** Implementación V8.0 Fase 2 — VigencyChecker, ContradictionDetector, AdversarialValidator.
+- **Auditor:** ALBRA Constructor (auto-auditoría para el commit V8.0 Fase 2).
+
+### Verificaciones realizadas
+
+| # | Verificación | Estado | Evidencia |
+|---|---|---|---|
+| 1 | VigencyChecker funciona (vigent/modified/superseded/uncertain) | VERIFIED | test_vigency_* (6 tests) |
+| 2 | ContradictionDetector detecta modificación (no genera falsos conflictos) | VERIFIED | test_contradiction_* (4 tests) |
+| 3 | No clasifica falsos conflictos como contradicciones | VERIFIED | default = not_determinable |
+| 4 | AdversarialValidator bloquea defectos blocking | VERIFIED | test_adversarial_validator_blocks_superseded_norm |
+| 5 | LawyerExam paso 7 integra validación | VERIFIED | test_lawyer_exam_step_7_uses_adversarial_validation |
+| 6 | LawyerExam paso 11 integra validación | VERIFIED | código exam.py líneas 761-788 |
+| 7 | Caso piloto V7.0 continúa funcionando | VERIFIED | test_pilot_case_regression_with_mock |
+| 8 | Abstenciones legítimas no eliminadas | VERIFIED | paso 9 ABSTAINED preservado |
+| 9 | Suite completa: 0 failures | VERIFIED | 1466 passed, 7 skipped |
+| 10 | Ruff PASS | VERIFIED | All checks passed |
+| 11 | Python 3.10/3.11/3.12 PASS | VERIFIED | CI matrix |
+| 12 | Clean-room PASS | VERIFIED | CI clean-room job |
+| 13 | CI PASS | VERIFIED | Run 40876863242 |
+| 14 | AGENTE-GENERAL intacto | VERIFIED | 69c79da, no changes |
+
+### Limitación B7 — explícita
+
+ContradictionDetector funciona de forma conservadora y actualmente no
+dispone de una implementación efectiva para demostrar automáticamente
+una relación `explicit_conflict`.
+
+La función `_check_explicit_conflict_markers()` retorna vacío cuando
+no existe evidencia suficiente. En la práctica, el sistema utiliza
+`not_determinable` como abstención.
+
+Decisión arquitectónica: ausencia de evidencia suficiente →
+`not_determinable` → abstención.
+
+B7 queda registrada como LIMITACIÓN / TRABAJO PENDIENTE.
+
+### Dictamen
+
+V8.0 FASE 2 — VALIDACIÓN JURÍDICA: CERRADA CON CI VERDE.
+B6 (vigencia) cerrada. B7 (contradicciones) registrada como limitación explícita.

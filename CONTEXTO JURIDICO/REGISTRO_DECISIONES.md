@@ -72,3 +72,35 @@ Cada decisión futura debe incluir identificador, fecha, estado, contexto, decis
 - **Evidencia:** Commit V6.0 (por publicar), 1393 passed, 5 skipped, Ruff verde, CI verde en 3.10/3.11/3.12 + clean-room.
 
 - **Condiciones para revisar:** Cuando se integre un OAuth provider real (Auth0/Keycloak), ejecutar los tests V6.0 contra el JWKS del provider en staging. Cuando se añada un nuevo role ALBRA, actualizar `ALBRA_ROLES` y `RoleMapping.allowed_roles`.
+
+---
+
+## D-V8.0-F2 — Validación jurídica: VigencyChecker + ContradictionDetector + AdversarialValidator
+
+- **Identificador:** D-V8.0-F2
+- **Fecha:** 2026-10-29
+- **Estado:** APPROVED
+- **Contexto:** V8.0 Fase 1 cerró las brechas de cobertura del corpus (B1-B4). Fase 2 cierra B6 (validación de vigencia) y B7 (detección de contradicciones).
+
+- **Decisión:** Implementar 3 módulos nuevos + integración en LawyerExam pasos 7 y 11.
+
+- **VigencyChecker**: opera sobre document-level (`status`, `effective_until`) + article-text markers ("modificado por", "derogado por", "sustituido por", "texto original revivido"). Retorna vigent | modified | superseded | uncertain. REGLA CRÍTICA: ausencia de info ≠ evidencia de vigencia → uncertain.
+
+- **ContradictionDetector**: clasifica pares de citas como explicit_conflict | modification | complementary | not_determinable. CONSERVADOR: default = not_determinable.
+
+- **AdversarialValidator**: envuelve los dos anteriores. Defectos con severity blocking/warning/info. Blocking → ok=False → LawyerExam BLOCKED.
+
+- **LIMITACIÓN B7 EXPLÍCITA**: ContradictionDetector no dispone de implementación efectiva para `explicit_conflict`. La función `_check_explicit_conflict_markers()` retorna vacío. En la práctica, el sistema utiliza `not_determinable` como abstención. Esto NO debe corregirse con inferencias semánticas o reglas inventadas. B7 queda como LIMITACIÓN / TRABAJO PENDIENTE.
+
+- **Alternativas consideradas:**
+  - *Inferencia semántica de conflictos* — RECHAZADO: sin ontología jurídica, la inferencia genera falsos positivos.
+  - *Reglas jurídicas hard-coded* — RECHAZADO: inventaría conocimiento jurídico.
+  - *Similitud textual* — RECHAZADO: similitud ≠ contradicción.
+
+- **Consecuencias:**
+  - El LawyerExam NO puede declararse SUCCESS cuando una norma citada está demostrablemente derogada.
+  - El caso piloto V7.0 (arts. 28/29/30) continúa funcionando: estas normas son vigent sin marcadores de modificación.
+  - Paso 9 (procesal) ABSTAINED preservado.
+  - 19 tests nuevos. 1466 total. CI verde.
+
+- **Evidencia:** Commit `1e4ad53`, CI Run `40876863242` SUCCESS, 1466 passed.

@@ -1,15 +1,161 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V8.0 FASE 1 — CORPUS V1.4 CON RAW_BYTES PRESERVADO`
+- **Estado del documento:** `V8.0 FASE 2 — VALIDACIÓN JURÍDICA`
 - **Última revisión documental:** 2026-10-29
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V8.0 Fase 2:** `d28a5d3` (V8.0 Fase 1 docs)
+- **HEAD final V8.0 Fase 2:** `1e4ad53` (V8.0 Fase 2 — Validación jurídica)
+- **Push:** VERIFIED (d28a5d3..1e4ad53 main)
+- **CI:** Run `40876863242`, commit `1e4ad53`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: 1466 passed, 7 skipped
+  - clean-room: SUCCESS
+
+## Commits V8.0 Fase 2
+
+| SHA | Mensaje |
+|---|---|
+| `1e4ad53` | feat: V8.0 Fase 2 — Validación jurídica (VigencyChecker + ContradictionDetector + AdversarialValidator) |
+
+## Resumen ejecutivo V8.0 Fase 2
+
+Fase 2 del plan V8.0: cierre de las brechas B6 (validación de
+vigencia) y B7 (detección de contradicciones fuente-fuente).
+Implementa VigencyChecker, ContradictionDetector, AdversarialValidator
+e integra la validación adversarial en los pasos 7 y 11 del LawyerExam.
+
+Trazabilidad:
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC
+- V7.0 → graduación del abogado operativo
+- V8.0 Fase 1 → Corpus V1.4 (2107 artículos + 5 sentencias)
+- V8.0 Fase 2 → Validación jurídica (este documento)
+
+## Componentes implementados
+
+### 1. VigencyChecker (`albra/knowledge/vigency.py`)
+
+Verifica la vigencia de normas citadas en el corpus V1.4. Opera
+sobre dos fuentes:
+
+- **Document-level**: `status` y `effective_until` del documento.
+- **Article-text-level**: marcadores embebidos en el texto del
+  artículo ("modificado por", "derogado por", "sustituido por",
+  "texto original revivido según Sentencia C-NNN").
+
+Resultado: `VigencyResult` con:
+- `status`: vigent | modified | superseded | uncertain
+- `superseded_by`, `superseded_at`, `reason`, `evidence_source`
+
+REGLA CRÍTICA: ausencia de información ≠ evidencia de vigencia.
+Si la vigencia no puede demostrarse → `uncertain` (abstención).
+
+### 2. ContradictionDetector (`albra/knowledge/contradiction.py`)
+
+Detecta conflictos jurídicos entre pares de citas. Clasifica:
+
+- `explicit_conflict`: una norma dice A, la otra dice no-A.
+- `modification`: una modifica/sustituye a la otra (no es
+  contradicción — es relación jerárquica).
+- `complementary`: regulan aspectos diferentes del mismo tema.
+- `not_determinable`: sin evidencia suficiente para clasificar.
+
+CONSERVADOR: no convierte cualquier diferencia en contradicción.
+Default: `not_determinable`.
+
+### 3. AdversarialValidator (`albra/lawyer/adversarial_validation.py`)
+
+Envuelve VigencyChecker + ContradictionDetector. Revisa:
+- vigencia de normas citadas;
+- contradicciones detectadas;
+- citas sin soporte verificable;
+- inferencias sin base documental.
+
+Resultado: `ValidationResult{ok: bool, defects: [...]}`. Cada defecto:
+- `defect_type`, `severity` (blocking | warning | info),
+  `citation`, `detail`, `source_evidence`, `affected_element`.
+
+Blocking (norma derogada, contradicción no resuelta) → `ok=False`.
+
+### 4. Integración en LawyerExam (`albra/lawyer/exam.py`)
+
+- **Paso 7 (estrategia)**: AdversarialValidator ejecuta ANTES de
+  formular estrategia. Si defectos blocking → BLOCKED.
+- **Paso 11 (revisión)**: AdversarialValidator ejecuta post-revisión.
+  Si nuevos defectos blocking → BLOCKED.
+
+Comportamiento fail-closed preservado: el caso NO puede declararse
+SUCCESS cuando sus fundamentos jurídicos presentan defectos
+verificables.
+
+## Tests V8.0 Fase 2 (19 nuevos)
+
+- Vigencia: vigent, modified, superseded, uncertain (6 tests)
+- Contradicción: modification, complementary, not_determinable (4 tests)
+- AdversarialValidator: blocking, no-evidence, clean pass (3 tests)
+- LawyerExam: integración paso 7, paso 11 (2 tests)
+- Regresión: caso piloto arts. 28/29/30 (1 test)
+- Casos límite: norma fuera del corpus, norma derogada synthetic (3 tests)
+
+## LIMITACIÓN B7 — EXPLÍCITA
+
+ContradictionDetector funciona de forma conservadora y actualmente
+**no dispone de una implementación efectiva** para demostrar
+automáticamente una relación `explicit_conflict`.
+
+La función `_check_explicit_conflict_markers()` actualmente retorna
+vacío cuando no existe evidencia suficiente, por lo que en la práctica
+el sistema utiliza `not_determinable` como abstención ante conflictos
+que no puede demostrar.
+
+Esto **NO debe corregirse ahora** mediante inferencias semánticas,
+similitud textual o reglas jurídicas inventadas.
+
+**Decisión arquitectónica**: ausencia de evidencia suficiente →
+`not_determinable` → abstención.
+
+**B7 queda registrada como LIMITACIÓN / TRABAJO PENDIENTE**, no como
+una capacidad plenamente resuelta. Para resolver B7 plenamente se
+requeriría:
+- Una ontología jurídica formal que mapee conceptos legales.
+- Especialistas con conocimiento de dominio (Fase 3).
+- Análisis semántico de normas con interpretación jurídica experta.
+
+## Conteos
+
+| Métrica | V8.0 Fase 1 (baseline) | V8.0 Fase 2 |
+|---|---|---|
+| Tests passed | 1447 | **1466** |
+| Tests skipped | 7 | **7** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+19** |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+
+## Confirmaciones
+
+- AGENTE-GENERAL: HEAD `69c79da`, no modificado por Fase 2 ✓
+- Corpus V1.3: preservado sin cambios (3 docs, 125 arts, PARTIAL) ✓
+- Corpus V1.4: preservado sin cambios (10 docs, 2107 arts, VERIFIED) ✓
+- Estructura criptográfica de provenance: sin cambios ✓
+- MatterStore, RBAC, OIDC, auth, auditoría, infraestructura: sin cambios ✓
+- NVIDIAProvider: sin cambios ✓
+- Abstenciones legítimas (paso 9 procesal): preservadas ✓
+
+## Próximas fases (NO iniciadas)
+
+- Fase 3: Pool de especialistas (arquitectura de contrato, sin desplegar)
+- Fase 4: Preparación para producción (solo documentación)
+
+---
+
+# Histórico: V8.0 Fase 1 (Corpus V1.4)
+
 - **HEAD inicial V8.0 Fase 1:** `2fd7cee` (V7.0 CURRENT_STATE)
 - **HEAD final V8.0 Fase 1:** `47a5bd1` (V8.0 Fase 1 — Corpus V1.4)
-- **Push:** VERIFIED (2fd7cee..47a5bd1 main)
 - **CI:** Run `40869679388`, commit `47a5bd1`, SUCCESS
-  - lint: SUCCESS
-  - test 3.10/3.11/3.12: 1447 passed, 7 skipped
-  - clean-room: SUCCESS
 
 ## Commits V8.0 Fase 1
 
