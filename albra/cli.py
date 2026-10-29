@@ -11,7 +11,7 @@ import click
 from albra.identity.manifest import AGENT_MANIFEST
 
 
-# ===== V5.1: CLI local-only guard =====
+# ===== V5.1: CLI local-only guard (V5.1.1: fail-closed on Settings errors) =====
 # The CLI commands that read or modify matter/pending-action data call
 # MatterStore directly, without going through McpServer.call_tool. That
 # means they bypass AuthContext propagation and tenant_id enforcement.
@@ -22,31 +22,79 @@ from albra.identity.manifest import AGENT_MANIFEST
 # MatterStore without an explicit, auditable override.
 #
 # The guard works as follows:
-#   * If ALBRA_ENVIRONMENT=production AND ALBRA_CLI_ALLOW_LOCAL != "1":
-#       The data-touching command refuses to run and prints a clear error.
-#   * ALBRA_CLI_ALLOW_LOCAL=1 is the explicit escape hatch. Setting it
-#     requires an operator with shell access to the production host, and
-#     its use should be audited via external logging (e.g. ssh session
-#     recording, sudo logs).
+#   * If Settings() cannot be imported or constructed for ANY reason
+#     (V5.1.1 — independent audit found that V5.1 silently swallowed
+#     this error and let the command continue, which is fail-OPEN):
+#       The command refuses with exit_code=2 and a clear error. The DB
+#       file is NOT created or modified. ALBRA_CLI_ALLOW_LOCAL=1 does
+#       NOT override this path — an unknown environment is refused
+#       unconditionally.
+#   * If Settings loads correctly:
+#       - ALBRA_ENVIRONMENT != production → command runs (dev/test).
+#       - ALBRA_ENVIRONMENT == production AND ALBRA_CLI_ALLOW_LOCAL != "1"
+#         → command refused with exit_code=2.
+#       - ALBRA_ENVIRONMENT == production AND ALBRA_CLI_ALLOW_LOCAL == "1"
+#         → command runs (escape hatch, audited, emergency recovery).
 #
 # Commands that do NOT touch tenant data (info, agent list, research) are
 # not guarded. They are read-only on tenant-agnostic shared resources
 # (manifest, organigrama, citation corpus).
 def _enforce_local_only(command_name: str) -> None:
-    """Refuse to run data-touching CLI commands under production settings.
+    """Refuse to run data-touching CLI commands under production settings,
+    or whenever the deployment environment cannot be determined reliably.
 
-    V5.1 HARDENING: closes the CLI bypass identified in V5.0.
-    Previously the CLI was *documented* as LOCAL_ONLY but the code did
-    nothing to enforce it. Now it does.
+    V5.1 HARDENING: closes the CLI bypass identified in V5.0. Previously
+    the CLI was *documented* as LOCAL_ONLY but the code did nothing to
+    enforce it. V5.1 added the guard.
+
+    V5.1.1 HARDENING: closes the fail-open path identified in the
+    independent audit of V5.1. The V5.1 guard had a ``try/except:
+    return`` around ``Settings()`` that silently swallowed any
+    initialization error and let the command continue with NO
+    environment check at all. An attacker who could manipulate
+    environment variables, sys.path, or imports to make ``Settings()``
+    raise could bypass the CLI guard entirely and reach the production
+    MatterStore.
+
+    V5.1.1 closes this: if ``Settings`` cannot be imported or
+    constructed, the guard refuses the command and exits 2 WITHOUT
+    touching the MatterStore. The DB file is never created or modified.
+    The escape hatch ``ALBRA_CLI_ALLOW_LOCAL=1`` is intentionally NOT
+    extended to this path — failing closed is the safest behavior when
+    the environment is unknown. The escape hatch remains valid only
+    when ``Settings`` loads correctly (V5.1 behavior preserved).
+
+    Behavior when ``Settings`` loads correctly (unchanged from V5.1):
+      * ``ALBRA_ENVIRONMENT != production`` → command runs.
+      * ``ALBRA_ENVIRONMENT == production`` AND
+        ``ALBRA_CLI_ALLOW_LOCAL != "1"`` → command refused with
+        ``exit_code=2``.
+      * ``ALBRA_ENVIRONMENT == production`` AND
+        ``ALBRA_CLI_ALLOW_LOCAL == "1"`` → command runs (escape hatch,
+        audited, emergency recovery only).
     """
+    # V5.1.1: NO bare `except: return`. If Settings cannot be loaded, we
+    # cannot know whether we are in production, so we refuse.
     try:
         from albra.config.settings import Settings
         settings = Settings()
-    except Exception:  # noqa: BLE001
-        # If Settings itself fails (e.g. insecure secrets), let the
-        # command itself surface the error. The guard is a safety net,
-        # not a substitute for proper configuration.
-        return
+    except Exception as e:  # noqa: BLE001
+        # V5.1.1: fail-closed. Do NOT continue. Do NOT touch the DB.
+        # ALBRA_CLI_ALLOW_LOCAL is intentionally NOT extended to this
+        # path — an unknown environment is refused unconditionally.
+        click.echo(
+            f"REFUSED: '{command_name}' cannot run because the ALBRA "
+            f"configuration could not be loaded reliably "
+            f"({type(e).__name__}: {e}). The CLI guard refuses to "
+            f"proceed without confirming the deployment environment. "
+            f"To run local-only commands: set ALBRA_ENVIRONMENT=development "
+            f"with valid ALBRA_JWT_SECRET and ALBRA_ADMIN_PASSWORD and "
+            f"retry. The matter store was not accessed, created, or "
+            f"modified.",
+            err=True,
+        )
+        sys.exit(2)
+
     if not settings.is_production():
         return
     if os.environ.get("ALBRA_CLI_ALLOW_LOCAL") == "1":
