@@ -654,31 +654,169 @@ class LawyerExam:
     # ----- Step 9: Procedural requirements -----
 
     def _step_09_procedural_requirements(self) -> None:
-        """Determinar requisitos procesales y términos con evidencia."""
-        # The corpus only has constitutional + 2 laws. Procedural
-        # requirements come from CPC/Ley 640/etc — NOT in corpus.
-        # We declare this honestly.
+        """Determinar requisitos procesales y términos con evidencia.
+
+        V8.0 Fase 3: activación condicional. El paso procesa solo cuando:
+          1. El caso declara ``procedure_type`` (civil, penal, conciliación).
+          2. El código procesal correspondiente está en el corpus V1.4.
+          3. Se encuentran artículos relevantes con keywords procesales.
+
+        Si no se cumple alguna condición → ABSTAINED.
+        La seguridad jurídica tiene prioridad sobre cobertura.
+        """
+        procedure_type = self.case_facts.get("procedure_type", "").lower().strip()
+
+        # Map procedure_type to corpus document slug
+        proc_map = {
+            "civil": "ley_1564_2012",       # CGP
+            "penal": "ley_0906_2004",       # CPP
+            "conciliacion": "ley_0640_2001",  # Ley 640
+            "conciliación": "ley_0640_2001",
+        }
+
+        if not procedure_type:
+            # No procedure_type declared → ABSTAIN
+            step = ExamStep(
+                step_number=9,
+                name="Requisitos procesales y términos",
+                status="abstained",
+                summary=(
+                    "El caso no declara procedure_type. No se puede "
+                    "determinar qué código procesal aplica. ABSTENIDO."
+                ),
+                evidence=[],
+                notes=[
+                    "Para activar el análisis procesal, el caso debe "
+                    "declarar procedure_type: 'civil', 'penal', o "
+                    "'conciliación'.",
+                ],
+            )
+            self.result.limitations.append(
+                "Paso 9 abstenido: el caso no declara procedure_type. "
+                "Los términos procesales deben determinarse manualmente "
+                "por el abogado humano."
+            )
+            self._record_step(step)
+            return
+
+        target_slug = proc_map.get(procedure_type)
+        if not target_slug:
+            # Unknown procedure_type → ABSTAIN
+            step = ExamStep(
+                step_number=9,
+                name="Requisitos procesales y términos",
+                status="abstained",
+                summary=(
+                    f"procedure_type='{procedure_type}' no reconocido. "
+                    f"Tipos válidos: civil, penal, conciliación. ABSTENIDO."
+                ),
+                evidence=[],
+            )
+            self.result.limitations.append(
+                f"Paso 9 abstenido: procedure_type='{procedure_type}' "
+                f"no tiene código procesal correspondiente en el corpus."
+            )
+            self._record_step(step)
+            return
+
+        # Check if the procedural code is in the corpus
+        proc_doc = None
+        try:
+            from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import (
+                ALL_DOCUMENTS_V14,
+            )
+            for slug, doc in ALL_DOCUMENTS_V14:
+                if slug == target_slug:
+                    proc_doc = doc
+                    break
+        except ImportError:
+            pass
+
+        if proc_doc is None:
+            # Procedural code not in corpus → ABSTAIN
+            step = ExamStep(
+                step_number=9,
+                name="Requisitos procesales y términos",
+                status="abstained",
+                summary=(
+                    f"procedure_type='{procedure_type}' → {target_slug} "
+                    f"no encontrado en corpus V1.4. ABSTENIDO."
+                ),
+                evidence=[],
+            )
+            self.result.limitations.append(
+                f"Paso 9 abstenido: código procesal {target_slug} "
+                f"no está en el corpus V1.4."
+            )
+            self._record_step(step)
+            return
+
+        # Search for procedural keywords in the relevant code
+        proc_keywords = ["término", "plazo", "competencia", "juzgado",
+                         "audiencia", "notificación", "recurrido",
+                         "interpone", "substanciación"]
+        relevant_arts: list[dict[str, Any]] = []
+        for art in proc_doc.get("articles", []):
+            text_lower = art["text"].lower()
+            matched_kw = [kw for kw in proc_keywords if kw in text_lower]
+            if matched_kw:
+                relevant_arts.append({
+                    "article": art["number"],
+                    "matched_keywords": matched_kw[:3],
+                    "text_preview": art["text"][:150],
+                })
+            if len(relevant_arts) >= 10:
+                break
+
+        if not relevant_arts:
+            # No articles with procedural keywords found → ABSTAIN
+            step = ExamStep(
+                step_number=9,
+                name="Requisitos procesales y términos",
+                status="abstained",
+                summary=(
+                    f"Código {target_slug} en corpus pero no se "
+                    f"encontraron artículos con keywords procesales "
+                    f"relevantes. ABSTENIDO."
+                ),
+                evidence=[],
+            )
+            self.result.limitations.append(
+                f"Paso 9 abstenido: {target_slug} en corpus pero sin "
+                f"artículos procesales identificables por keywords."
+            )
+            self._record_step(step)
+            return
+
+        # Found relevant procedural articles — present as contextual
+        # evidence with explicit disclaimer
         step = ExamStep(
             step_number=9,
             name="Requisitos procesales y términos",
-            status="abstained",
+            status="ok",
             summary=(
-                "El corpus V1.3 NO contiene Código de Procedimiento Civil "
-                "ni Ley 640 de 2001 (conciliación) ni otros cuerpos "
-                "procesales. No se pueden determinar términos procesales "
-                "con evidencia."
+                f"procedure_type='{procedure_type}' → {target_slug} "
+                f"({len(proc_doc.get('articles', []))} arts.). "
+                f"Encontrados {len(relevant_arts)} artículos con "
+                f"keywords procesales. Presentados como evidencia "
+                f"contextual — requieren revisión humana."
             ),
-            evidence=[],
+            evidence=[
+                {"type": "procedural_code", "slug": target_slug,
+                 "total_articles": len(proc_doc.get("articles", []))},
+                {"type": "relevant_articles", "items": relevant_arts},
+            ],
             notes=[
-                "Requisito: el caso debe ser revisado por abogado humano "
-                "para identificar plazos, juzgado competente, cuantía, "
-                "y trámite procesal aplicable.",
+                "IMPORTANTE: los artículos presentados son resultado de "
+                "una búsqueda por keywords, no de un análisis jurídico "
+                "del procedimiento aplicable. Requieren revisión por "
+                "abogado humano para confirmar relevancia y aplicabilidad.",
             ],
         )
         self.result.limitations.append(
-            "Paso 9 abstenido: corpus V1.3 no contiene cuerpos procesales "
-            "(CPC, Ley 640, Ley 1564, etc.). Los términos procesales "
-            "deben determinarse manualmente por el abogado humano."
+            f"Paso 9 procesal: {len(relevant_arts)} artículos de "
+            f"{target_slug} presentados como evidencia contextual. "
+            f"Búsqueda por keywords — no es análisis jurídico definitivo."
         )
         self._record_step(step)
 
