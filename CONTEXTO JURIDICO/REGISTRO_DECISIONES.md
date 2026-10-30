@@ -148,3 +148,56 @@ Cada decisión futura debe incluir identificador, fecha, estado, contexto, decis
 
 - **Condiciones para revisar:** Cuando se añadan nuevos `document_type` reconocidos al corpus, extender `_HIERARCHY_RANK` en `norm_reference.py`. Cuando se añadan nuevos códigos procesales al corpus V1.4, extender `proc_map` en `exam.py` paso 9. Cuando se desee detección semántica de contradicciones, requires ontología jurídica formal — fuera del alcance de Fase 3.
 
+---
+
+## D-V8.0-F4 — Draft Citation Audit + VigencyChecker FP fix + stale text V1.3→V1.4
+
+- **Identificador:** D-V8.0-F4
+- **Fecha:** 2026-10-30
+- **Estado:** APPROVED
+- **Contexto:** La auditoría profunda pre-Fase 4 (sobre commit `411977d`) identificó 3 riesgos de falsa capacidad jurídica con candidato a solución mínima: (1) drafts LLM pueden contener citas alucinadas sin detección determinista; (2) VigencyChecker tiene 1 falso positivo confirmado (Constitución art. 62 "modificado por el legislador"); (3) 9 strings stale en exam.py dicen "V1.3" cuando el lookup real usa V1.4 (subrepresentación de cobertura + LLM abstiene incorrectamente). El diseño formal produjo dictamen DESIGN READY FOR IMPLEMENTATION con 3 candidatos P0/P1/P1.
+
+- **Decisión:** Implementar los 3 candidatos en orden de complejidad creciente (Candidato 3 → 2 → 1), conforme al diseño aprobado. Sin extender alcance, sin introducir nuevas capacidades, sin ontología jurídica, sin contradicción semántica, sin inferencia de aplicabilidad, sin nuevos agentes.
+
+- **Candidato 1 (P0) — Draft Citation Audit determinista:**
+  - Nuevo método `_audit_draft_citations()` en `LawyerExam`, ejecutado entre step 10 (draft) y step 11 (review).
+  - Reutiliza `CitationAuditor.extract_citations()` para extraer citas del `drafted_document`.
+  - Normaliza cada cita a slug V1.4 vía alias map + V1.4 `doc["number"]` lookup + sentencia slash→hyphen.
+  - Cita a norma externa NO en V1.4 → BLOCKING defect en `result.draft_citation_defects` (campo nuevo).
+  - Cita a artículo adicional de norma V1.4 verificada → WARNING (limitation; no blocking).
+  - Disclaimer permanente: NO verifica fidelidad de paráfrasis ni aplicabilidad jurídica.
+  - Cierra riesgo O.1, O.2, O.9 (subtipo "citas a normas inexistentes").
+
+- **Candidato 2 (P1) — VigencyChecker false positives fix:**
+  - Negative lookahead aplicado a 5 markers (`modificado/adicionado/subrogado/sustituido/derogado por`) en `vigency.py` Y `contradiction.py`.
+  - Exclusiones: `el legislador`, `el gobierno`, `el reglamento`, `la presente Ley`, `esta Ley`.
+  - Único falso positivo corregido: Constitución art. 62 (modified → vigent). Total modified en V1.4: 86 (era 87).
+  - True positives preservados: Constitución arts. 77, 96, 111, 112, 303, 361 siguen modified.
+  - Consistencia VigencyChecker ↔ ContradictionDetector preservada (unificación Fase 2.2 extendida).
+
+- **Candidato 3 (P1) — Stale text V1.3 → V1.4:**
+  - 9 strings stale en `exam.py` actualizados de "V1.3" → "V1.4": docstrings, std_limitations (coverage + jurisprudencia), step 5/6 summaries/notes, step 7/10/11 LLM prompts.
+  - Limitations estándar ahora enumeran los 5 cuerpos legales de V1.4 con conteos (2107 artículos total) + 5 sentencias T-xxx-2020.
+  - 4 menciones "V1.3" preservadas: documentan el fallback V1.4→V1.3 (defensa en profundidad).
+  - Cierra riesgo O.8 (subrepresentación de cobertura + LLM abstiene incorrectamente).
+
+- **Alternativas consideradas (todas RECHAZADAS en la auditoría pre-Fase 4):**
+  - *Detector semántico de contradicciones (cerrar B7 4.5)* — RECHAZADO: requiere ontología jurídica, sin definición precisa.
+  - *Nueva capa de aplicabilidad normativa (sujeto/conducta/materia/ámbito)* — RECHAZADO: sobreconstrucción sin caso de uso.
+  - *Pool de especialistas (`specialists.py`)* — RECHAZADO: placeholders sin valor inmediato.
+  - *Ampliación de corpus (Código Civil, CPACA, etc.)* — RECHAZADO para Fase 4: requiere pipeline de ingesta.
+  - *Verificación de fidelidad de paráfrasis vía NLI* — RECHAZADO: requiere modelo ML externo.
+  - *Knowledge graph / citation graph wiring* — RECHAZADO: sobreconstrucción sin consumidor.
+
+- **Consecuencias:**
+  - 46 tests nuevos (12 stale text + 22 vigency FP + 12 draft audit). Suite completa: 1543 passed, 7 skipped, 0 failed.
+  - Drafts con citas alucinadas ahora se bloquean deterministamente antes de step 11.
+  - VigencyChecker produce 1 warning menos (más preciso).
+  - LLM recibe prompts que reflejan correctamente V1.4 (puede invocar CGP/CPP/CST/Ley 640 sin abstención incorrecta).
+  - B7 continúa PARCIALMENTE RESUELTA — sin cambios.
+  - Corpus V1.3, V1.4, v14_raw, AGENTE-GENERAL, RealProviderGuard, RBAC/OIDC/auth/audit intactos.
+
+- **Evidencia:** Commit `02a7ea3`, CI Run `40985592270` SUCCESS (lint + 3.10/3.11/3.12 + clean-room), 1543 passed.
+
+- **Condiciones para revisar:** Cuando se añadan nuevos formatos de cita jurídica al `CitationAuditor.extract_citations()`, considerar extender `_looks_like_external_norm()` con nuevos patrones. Cuando se detecten nuevos falsos positivos en VigencyChecker, añadir frases al negative lookahead. Cuando se desee verificar fidelidad de paráfrasis, requiere NLI/entailment model — fuera de alcance Fase 4.
+

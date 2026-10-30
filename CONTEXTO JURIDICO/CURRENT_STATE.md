@@ -1,35 +1,36 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V8.0 FASE 3 — REFERENCIAS NORMATIVAS Y PASO 9 CONDICIONAL`
+- **Estado del documento:** `V8.0 FASE 4 — DRAFT CITATION AUDIT + VIGENCYCHECKER FP FIX + STALE TEXT V1.3→V1.4`
 - **Última revisión documental:** 2026-10-30
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
-- **HEAD inicial V8.0 Fase 3:** `47c0555` (V8.0 Fase 2.2 docs)
-- **HEAD final V8.0 Fase 3:** `0c886be` (V8.0 Fase 3 — referencias normativas y paso 9 condicional)
-- **Push:** VERIFIED (47c0555..0c886be main)
-- **CI:** Run `40980036870`, commit `0c886be`, SUCCESS
+- **HEAD inicial V8.0 Fase 4:** `411977d` (V8.0 Fase 3 docs)
+- **HEAD final V8.0 Fase 4:** `02a7ea3` (V8.0 Fase 4 — implementación)
+- **Push:** VERIFIED (411977d..02a7ea3 main)
+- **CI:** Run `40985592270`, commit `02a7ea3`, SUCCESS
   - lint: SUCCESS
   - test 3.10/3.11/3.12: SUCCESS
   - clean-room: SUCCESS
 
-## Commits V8.0 Fase 3
+## Commits V8.0 Fase 4
 
 | SHA | Mensaje |
 |---|---|
-| `0c886be` | feat: V8.0 Fase 3 — referencias normativas y paso 9 condicional |
+| `02a7ea3` | feat: V8.0 Fase 4 — Draft Citation Audit + VigencyChecker FP fix + stale text V1.3→V1.4 |
 
-## Resumen ejecutivo V8.0 Fase 3
+## Resumen ejecutivo V8.0 Fase 4
 
-Fase 3 del plan V8.0: introduce un `NormReference` determinista para
-resolver cross-references artículo→artículo del corpus V1.4 y
-convierte el paso 9 (requisitos procesales) del `LawyerExam` en
-activación condicional basada en un `procedure_type` explícito.
+Fase 4 del plan V8.0: 3 candidatos mínimos y seguros aprobados en
+el diseño formal (dictamen DESIGN READY FOR IMPLEMENTATION tras
+auditoría profunda). Cada candidato cierra un riesgo específico
+identificado en la auditoría pre-Fase 4 sin introducir nuevas
+capacidades, ontologías, ni cambios arquitectónicos.
 
-**Disciplina de seguridad preservada:**
+**Disciplina preservada:**
 - No se infiere `procedure_type` por keywords.
 - No se presenta evidencia contextual como conclusión jurídica.
-- No se activa contradicción semántica.
+- No se activa contradicción semántica (B7 permanece PARCIALMENTE RESUELTA).
 - No se crea prevalencia jurídica automática.
-- No se resuelven referencias externas (quedan como `uncertain`).
+- No se resuelven referencias externas (quedan como uncertain / blocking).
 - No se inventan rangos jurídicos para tipos desconocidos.
 
 **Trazabilidad:**
@@ -40,112 +41,124 @@ activación condicional basada en un `procedure_type` explícito.
 - V8.0 Fase 1 → Corpus V1.4 (2107 artículos + 5 sentencias)
 - V8.0 Fase 2 → Validación jurídica
 - V8.0 Fase 2.2 → Corrección verificable de B7
-- V8.0 Fase 3 → Referencias normativas + paso 9 condicional (este documento)
+- V8.0 Fase 3 → Referencias normativas + paso 9 condicional
+- V8.0 Fase 4 → Draft audit + VigencyChecker FP fix + stale text (este documento)
 
 ## Componentes implementados
 
-### 1. NormReference (`albra/knowledge/norm_reference.py`)
+### 1. Draft Citation Audit determinista (`albra/lawyer/exam.py`)
 
-Resuelve cross-references artículo→artículo en el corpus V1.4 a
-partir de patrones regex deterministas:
+Nuevo método `_audit_draft_citations()` ejecutado entre step 10
+(draft) y step 11 (review). Pipeline:
 
-- `artículo N de la Constitución`
-- `artículo N de la Ley X de YYYY`
-- `artículo N del Código Sustantivo del Trabajo`
-- `artículo N del Código General del Proceso`
-- `artículo N del Código de Procedimiento Penal`
+1. Extrae todas las citas del `drafted_document` usando
+   `CitationAuditor.extract_citations()`.
+2. Normaliza cada cita a un slug V1.4 usando el alias map del
+   `_lookup_in_corpus`, más un lookup directo por `doc["number"]`,
+   más normalización slash→hyphen para sentencias.
+3. Para cada cita extraída:
+   - **(slug, article) en `citations_verified`** → OK.
+   - **slug verificado pero artículo distinto** → WARNING
+     (limitation; no blocking).
+   - **slug en V1.4 pero no en verified** → WARNING (limitation).
+   - **slug NO en V1.4 (norma externa o sentencia externa)** →
+     BLOCKING defect en `result.draft_citation_defects`.
+   - **Nombre no estandarizado + estructura reconocida (Ley N de
+     YYYY, Sentencia X-N/YYYY, Decreto N de YYYY, Código X)** →
+     BLOCKING (presunción de norma externa).
+   - **Nombre no estandarizado + estructura NO reconocida** → WARNING
+     (conservador; no blocking).
+4. Si hay ≥1 defect blocking → `overall_status='BLOCKED'` con
+   detalle explícito. Step 11 NO se ejecuta.
+5. Disclaimer permanente en `result.limitations`: *"Audit de citas
+   del draft (V8.0 Fase 4): detecta citas a normas externas al
+   corpus V1.4; NO verifica fidelidad de paráfrasis ni aplicabilidad
+   jurídica."*
 
-Resultado: `NormReference` (dataclass frozen) con:
-- `source_doc`, `source_article`, `target_doc`, `target_article`
-- `reference_type` = siempre `"references"` (informativa)
-- `confidence` = `"verified"` solo cuando source y target existen en V1.4;
-  `"uncertain"` en caso contrario
-- `evidence`, `evidence_source`, `source_location`
+**Campo nuevo:** `LawyerExamResult.draft_citation_defects:
+list[dict[str, Any]]` (default_factory=list). Incluido en `as_dict()`.
 
-**Reglas de seguridad:**
-- NO usa LLM. Sin imports de `albra.llm` ni providers.
-- NO crea contradicciones: el `ContradictionDetector` usa patrones
-  distintos (`contraviene`, `incompatible con`) — no los de
-  `NormReference`.
-- NO crea modificaciones: los marcadores `modificado por`/`adicionado
-  por`/`subrogado por` pertenecen al `VigencyChecker`.
-- NO crea prevalencia: la jerarquía normativa es derivada del
-  `document_type`, no almacenada en la referencia.
-- `uncertain` NO bloquea: `AdversarialValidator` no consume
-  `NormReference`; es puramente metadata de trazabilidad.
-- Frases informativas (`de conformidad con`, `con arreglo a`,
-  `según lo dispuesto en`, `en los términos del artículo`) NO se
-  convierten en contradicción ni en prevalencia — son patrones
-  generales del `NormReference`, distintos a los patrones de
-  contradicción explícita del `ContradictionDetector`.
+**Cierra riesgo:** O.1 (norma encontrada presentada como aplicable),
+O.2 (cita encontrada presentada como correcta jurídicamente), O.9
+(LLM afirmación presentada como conclusión jurídica). Cierra SOLO
+el subtipo "citas a normas inexistentes"; **no** cierra paráfrasis
+infiel (requiere NLI, fuera de alcance).
 
-### 2. Jerarquía normativa derivada
+### 2. VigencyChecker false positives fix (`albra/knowledge/vigency.py` + `albra/knowledge/contradiction.py`)
 
-`get_hierarchy_rank(document_type)` y `compare_hierarchy(a, b)`:
-- `constitucion` → 1 (norma de normas, art. 4)
-- `ley` → 2 (rango legislativo)
-- `codigo_sustantivo` → 2 (Decreto-Ley 2663/1950 — mismo rango que ley)
-- Tipo desconocido → `999` / comparación retorna `"unknown"`
+Negative lookahead aplicado a 5 markers (modificado/adicionado/
+subrogado/sustituido/derogado por) en ambos módulos. Exclusiones:
 
-No existe `inferred`, `hierarchy_higher` ni `hierarchy_lower` como
-campos. La jerarquía es un cálculo derivado, no una relación
-almacenada. Los tipos desconocidos NO reciben rango jurídico inventado.
+- `el legislador` — uso sustantivo (WHO can modify, no actual amendment)
+- `el gobierno` — uso sustantivo
+- `el reglamento` — uso sustantivo
+- `la presente Ley` — auto-referencia
+- `esta Ley` — auto-referencia
 
-### 3. Paso 9 condicional (`albra/lawyer/exam.py`)
+**Evidencia cuantificada en V1.4 corpus real:**
 
-`_step_09_procedural_requirements()` reescrito con 4 guards estrictos:
+| Marker | Antes (loose) | Después (strict) | Falsos positivos excluidos |
+|---|---:|---:|---:|
+| `modificado por` | 53 | 52 | **1** (Constitución art. 62) |
+| `adicionado por` | 30 | 30 | 0 |
+| `subrogado por` | 5 | 5 | 0 |
+| `sustituido por` | 2 | 2 | 0 |
+| `derogado por` | 12 | 12 | 0 |
 
-1. **`procedure_type` explícito**: leído de
-   `self.case_facts.get("procedure_type", "")`. Nunca inferido por
-   keywords. Si ausente → ABSTAINED.
-2. **`procedure_type` soportado**: `proc_map` solo reconoce
-   `civil` (→ CGP), `penal` (→ CPP), `conciliación` (→ Ley 640). Si
-   no soportado → ABSTAINED.
-3. **Código procesal en corpus**: si el slug no está en
-   `ALL_DOCUMENTS_V14` → ABSTAINED.
-4. **Evidencia con keywords**: las keywords (`término`, `plazo`,
-   `competencia`, `juzgado`, `audiencia`, `notificación`, `recurrido`,
-   `interpone`, `substanciación`) recuperan ÚNICAMENTE evidencia
-   contextual dentro del código ya seleccionado. Si no encuentran
-   artículos → ABSTAINED.
+**Único falso positivo corregido:** Constitución art. 62
+("modificado por el legislador, a menos que el objeto de la
+donación desaparezca") — reclasificado de `modified` (warning) →
+`vigent`.
 
-Solo tras pasar los 4 guards → `status="ok"` con evidencia contextual
-y disclaimer explícito: *"los artículos presentados son resultado de
-una búsqueda por keywords, no de un análisis jurídico del
-procedimiento aplicable. Requieren revisión por abogado humano para
-confirmar relevancia y aplicabilidad."*
+**True positives preservados:** Constitución arts. 77, 96, 111,
+112, 303, 361 (con "modificado por el artículo N del Acto
+Legislativo Y") siguen detectados como `modified`. Total modified
+en V1.4: 86 (era 87).
+
+**Consistencia VigencyChecker ↔ ContradictionDetector preservada:**
+los 5 patrones están unificados con el mismo negative lookahead
+en ambos módulos (extiende la unificación de Fase 2.2 HALLAZGO 2).
+
+### 3. Stale text V1.3 → V1.4 (`albra/lawyer/exam.py`)
+
+9 referencias stale a "V1.3" en strings que se muestran al usuario
+o se envían al LLM actualizadas a "V1.4":
+
+| Línea | Contexto | Cambio |
+|---:|---|---|
+| 22 | docstring módulo | "V1.3 real" → "V1.4 real (Constitución 1991, CGP Ley 1564/2012, Ley 640/2001, CPP Ley 906/2004, CST)" |
+| 118 | docstring LawyerExam | "V1.3 corpus auditor" → "V1.4 corpus auditor" |
+| 221–228 | std_limitations | Limitation V1.3 con 125 arts → V1.4 con 2107 arts + 5 cuerpos enumerados |
+| 226–228 | std_limitations | "No hay jurisprudencia" → "5 sentencias T-001/002/003/100/445-2020 en texto reconstruido" |
+| 376 | step 5 summary | "corpus V1.3" → "corpus V1.4" |
+| 383 | step 5 note | "corpus V1.3" → "corpus V1.4" |
+| 388 | step 5 abort | "corpus V1.3" → "corpus V1.4" |
+| 506 | step 6 note | "corpus V1.3" → "corpus V1.4" |
+| 586 | step 7 LLM prompt | "NORMAS VERIFICADAS (corpus V1.3)" → "NORMAS VERIFICADAS (corpus V1.4 — Constitución/CGP/CPP/CST/Ley 640)" |
+| 847 | step 10 LLM prompt | Igual cambio que step 7 |
+| 892 | step 11 LLM prompt | "estén en el corpus V1.3" → "estén en el corpus V1.4" |
+
+**4 menciones "V1.3" preservadas** (líneas 395, 397, 399, 403):
+documentan el fallback V1.4 → V1.3 si el import V1.4 falla. Son
+defensa en profundidad, no stale text.
+
+**Cierra riesgo O.8** (subrepresentación de cobertura + LLM abstiene
+incorrectamente por creer que V1.3 es el corpus activo).
 
 ## Conteos
 
-| Métrica | V8.0 Fase 2.2 (baseline) | V8.0 Fase 3 |
+| Métrica | V8.0 Fase 3 (baseline) | V8.0 Fase 4 |
 |---|---|---|
-| Tests passed | 1478 | **1497** |
+| Tests passed | 1497 | **1543** |
 | Tests skipped | 7 | **7** |
 | Tests failed | 0 | **0** |
-| Net new tests | — | **+19** |
+| Net new tests | — | **+46** |
 | Lint | All checks passed | All checks passed |
 | CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
 | Clean-room | SUCCESS | SUCCESS |
-| Referencias totales | — | 127 |
-| Referencias verified | — | 44 |
-| Referencias uncertain | — | 83 |
-
-## Referencias verified — muestra representativa
-
-| Source | Target | Tipo | Confidence | Cambia decisión del motor? |
-|---|---|---|---|---|
-| constitución art. 116 | constitución art. 237 | references | verified | NO — solo enriquece contexto |
-| CPP art. 89 | constitución art. 58 | references | verified | NO — solo enriquece contexto |
-| CGP art. 621 | Ley 640 art. 38 | references | verified | NO — solo enriquece contexto |
-| CST art. 353 | constitución art. 39 | references | verified | NO — solo enriquece contexto |
-| constitución art. 48 | Ley 812/2003 (externa) | references | uncertain | NO — solo enriquece contexto |
-
-`NormReference` no es importado por ningún módulo bajo `albra/` fuera
-de `norm_reference.py`. Por tanto, las 44 referencias verified **no
-cambian ninguna decisión del motor** (VigencyChecker, ContradictionDetector,
-AdversarialValidator, LawyerExam). Aportan exclusivamente
-trazabilidad determinista — opción B (mejora de contexto sin
-alteración de decisiones).
+| VigencyChecker modified count | 87 | **86** (-1 falso positivo) |
+| Draft citation audit defects | — | nuevo campo |
+| Limitations estándar | menciona V1.3 (stale) | menciona V1.4 (correcto) |
 
 ## Confirmaciones
 
@@ -153,29 +166,60 @@ alteración de decisiones).
 - Corpus V1.3: preservado sin cambios ✓
 - Corpus V1.4: preservado sin cambios ✓ (último commit: `47a5bd1`)
 - v14_raw HTMLs: preservados sin cambios ✓
-- `exam.py`: solo método `_step_09_procedural_requirements` modificado ✓
+- `exam.py`: cambios solo en strings stale + nuevo método `_audit_draft_citations()` + nuevo campo `draft_citation_defects` ✓
+- `vigency.py`: solo 5 regex patterns modificados (negative lookahead) ✓
+- `contradiction.py`: solo 5 regex patterns mirror modificados ✓
 - `RealProviderGuard`: sin cambios ✓
-- `VigencyChecker`: sin cambios ✓
-- `ContradictionDetector`: sin cambios ✓
+- `VigencyChecker` (interface): sin cambios — solo mejora calidad del warning ✓
+- `ContradictionDetector` (interface): sin cambios ✓
 - `AdversarialValidator`: sin cambios ✓
 - Seguridad, RBAC, OIDC, auth, audit: sin cambios ✓
 - NVIDIAProvider: sin cambios ✓
 - Abstenciones legítimas: preservadas ✓
 - `procedure_type` nunca inferido por keywords ✓
 - Disclaimer de revisión humana presente en paso 9 ✓
+- Draft citation audit NO verifica fidelidad de paráfrasis (limitación explícita) ✓
+- Draft citation audit NO reemplaza step 11 (ambos corren) ✓
 
-## Estado B7 después de Fase 3
+## Estado B7 después de Fase 4
 
-B7 continúa como **PARCIALMENTE RESUELTA**. `_check_explicit_conflict_markers()`
-sigue operando con cross-references explícitas (`contraviene`,
-`incompatible con`). Fase 3 NO introdujo detección de contradicción
-semántica — la decisión arquitectónica de Fase 2/2.2 se mantiene: sin
-ontología jurídica, la inferencia semántica genera falsos positivos y
-queda excluida.
+B7 continúa como **PARCIALMENTE RESUELTA**. Fase 4 NO introdujo
+detección de contradicción semántica. La decisión arquitectónica de
+Fase 2/2.2/3 se mantiene: sin ontología jurídica, la inferencia
+semántica genera falsos positivos y queda excluida.
 
 ## Próximas fases (NO iniciadas)
 
-- Fase 4: Preparación para producción (solo documentación)
+- Fase 5: NO definida. Cualquier nueva capacidad requiere nueva
+  auditoría profunda pre-fase (similar a la que produjo este
+  diseño Fase 4).
+
+---
+
+# Histórico: V8.0 Fase 3 (Referencias normativas y paso 9 condicional)
+
+- **HEAD inicial V8.0 Fase 3:** `47c0555` (V8.0 Fase 2.2 docs)
+- **HEAD final V8.0 Fase 3:** `411977d` (V8.0 Fase 3 — docs)
+- **Push:** VERIFIED (47c0555..0c886be..411977d main)
+- **CI:** Run `40980036870` (impl `0c886be`) + Run `40980612725` (docs `411977d`), both SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: SUCCESS
+  - clean-room: SUCCESS
+
+## Commits V8.0 Fase 3
+
+| SHA | Mensaje |
+|---|---|
+| `0c886be` | feat: V8.0 Fase 3 — referencias normativas y paso 9 condicional |
+| `411977d` | docs: V8.0 Fase 3 — CURRENT_STATE + REGISTRO_DECISIONES + REGISTRO_AUDITORIAS actualizados |
+
+## Resumen ejecutivo V8.0 Fase 3
+
+Fase 3 introdujo `NormReference` determinista para cross-references
+artículo→artículo del corpus V1.4 (44 verified + 83 uncertain) y
+convirtió el paso 9 (procedural) en activación condicional con 4
+guards estrictos basados en `procedure_type` explícito. B7
+permaneció PARCIALMENTE RESUELTA.
 
 ---
 
