@@ -1998,3 +1998,54 @@ deploy). Ninguno es código ALBRA.
 
 **No se despliega en producción** en esta intervención, como pidió el
 brief V5.1.
+
+
+---
+
+## Evolución estratégica posterior a V8.0 — Propuesta de POOL DE ABOGADOS ALBRA
+
+- **Fecha de registro:** 2026-10-29
+- **Estado:** DIRECCIÓN ARQUITECTÓNICA PROPUESTA; pendiente de diseño formal y auditoría antes de implementar.
+- **Base de referencia:** DESPACHO JURÍDICO ALBRA V8.0, aceptado como primera versión funcional con limitaciones mediante dictamen `ACCEPTANCE VERIFIED WITH LIMITATIONS`.
+- **Decisión de principio:** explorar una arquitectura de especialistas independientes, cada uno construido sobre una instancia/base de `AGENTE-GENERAL` y equipado con un chaleco especializado de su rama jurídica. No se adopta un único cerebro monolítico que pretenda dominar todas las ramas del derecho.
+
+### Modelo conceptual
+
+1. **POOL DE ABOGADOS ALBRA:** futura capa superior de coordinación. Recibiría asuntos, identificaría la especialidad requerida, asignaría o solicitaría intervención de especialistas, reuniría sus resultados y presentaría una respuesta consolidada. No debe convertirse en un abogado omnisciente ni inventar conclusiones que los especialistas no fundamenten.
+2. **Especialistas:** cada abogado sería un proyecto/agente especializado basado en `AGENTE-GENERAL`, con su propia identidad, configuración, chaleco, límites, corpus/fuentes, pruebas y auditoría. El núcleo universal `AGENTE-GENERAL` se mantiene intacto; la especialidad vive en el chaleco y sus recursos propios.
+3. **MARIO:** nombre propuesto para el especialista de derecho laboral y, cuando se defina el alcance, seguridad social. Arquitectura prevista: `AGENTE-GENERAL + CHALECO LABORAL`.
+4. **ANA:** nombre propuesto para el especialista de derecho penal y, cuando se defina el alcance, procedimiento penal. Arquitectura prevista: `AGENTE-GENERAL + CHALECO PENAL`.
+5. **Especialistas futuros:** civil, comercial, administrativo/contencioso y procesal, entre otros, solo después de justificar cada especialidad mediante auditoría y caso de uso. La lista no constituye autorización para crearlos.
+6. **Comunicación:** MCP es el mecanismo de integración previsto a evaluar para que el Pool solicite trabajo a los especialistas. Contratos, permisos, identidad, trazabilidad, aislamiento de expedientes y límites de delegación deberán diseñarse antes de conectar agentes.
+7. **Casos multidisciplinares:** el Pool podrá solicitar análisis separados a dos o más especialistas cuando el asunto lo requiera. Cada especialista conserva la responsabilidad sobre su análisis; el Pool consolida y señala desacuerdos o vacíos, sin convertir una opinión en verdad jurídica automática.
+
+### Relación con DESPACHO JURÍDICO V8.0
+
+- V8.0 permanece aceptado como primera versión funcional bajo sus limitaciones documentadas; no se reabre ni se altera por esta propuesta.
+- V8.0 sirve como antecedente, referencia técnica y evidencia de capacidades jurídicas ya verificadas. No se declara automáticamente el coordinador del Pool ni un especialista universal para todas las ramas.
+- No se presume que sus módulos, corpus o capacidades puedan copiarse íntegramente a cada chaleco. La reutilización deberá decidirse con auditoría técnica y de dominio.
+- La aceptación de V8.0 no implica que los futuros especialistas estén validados ni que puedan actuar autónomamente. Revisión humana cualificada seguirá siendo obligatoria para actuaciones jurídicas reales.
+
+### Principios y restricciones
+
+- Preferir varios especialistas delimitados antes que un cerebro jurídico monolítico.
+- Reutilizar el mismo ADN y la arquitectura base de `AGENTE-GENERAL`; no modificar el repositorio central para introducir conocimiento jurídico.
+- No crear un nuevo agente superior con conocimiento jurídico duplicado: el Pool será principalmente coordinación, enrutamiento, control y consolidación.
+- No crear todos los especialistas de una vez. Validar la arquitectura con un piloto y ampliar solo tras evidencia.
+- No mezclar automáticamente corpus, permisos, expedientes ni memorias entre especialistas.
+- Toda delegación debe ser trazable; el Pool debe conservar quién analizó qué, con qué fuentes y bajo qué limitaciones.
+- Los especialistas deben abstenerse cuando la materia exceda su chaleco, el corpus no cubra la cuestión o falte evidencia.
+- No declarar una especialidad operativa por tener un prompt o un repositorio creado: requiere pruebas, auditoría y aceptación propias.
+
+### Próximo paso recomendado — todavía no autorizado como implementación
+
+Realizar un **diseño arquitectónico y auditoría de viabilidad del POOL DE ABOGADOS ALBRA**, sin modificar código ni crear agentes. El diseño deberá comparar:
+- repositorios/agentes independientes basados en `AGENTE-GENERAL` frente a alternativas de despliegue;
+- límites entre núcleo, chaleco, corpus y configuración;
+- rol exacto del Pool y si necesita ser agente o servicio de coordinación;
+- comunicación MCP, contratos, autenticación, autorización y aislamiento;
+- enrutamiento de casos simples y multidisciplinares;
+- trazabilidad, revisión humana, abstención y gestión de desacuerdos;
+- estrategia de piloto con MARIO o ANA y criterios de aceptación.
+
+**No se ha autorizado todavía crear MARIO, ANA, el Pool, nuevos repositorios ni modificar AGENTE-GENERAL o DESPACHO-JURIDICO.** Esta entrada documenta la dirección conceptual solicitada, no una implementación ni un diseño técnico aprobado.
