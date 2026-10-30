@@ -19,7 +19,9 @@ de la recepción a la entrega. Los 12 pasos del brief V7.0:
 DISCIPLINA V7.0:
   - Cada invocación al LLM pasa por RealProviderGuard. Si no hay
     provider real, el caso queda BLOQUEADO con causa explícita.
-  - Las citas jurídicas se verifican contra el corpus V1.3 real.
+  - Las citas jurídicas se verifican contra el corpus V1.4 real
+    (Constitución 1991, CGP Ley 1564/2012, Ley 640/2001, CPP Ley 906/2004,
+    Código Sustantivo del Trabajo).
     Cualquier afirmación que no pueda respaldarse → ABSTENCIÓN.
   - Elaboración de borradores usa SOLO artículos presentes en el
     corpus; los artículos fuera del corpus se marcan como NO_RESUELTO.
@@ -35,6 +37,7 @@ presentación, firma y envío quedan sujetos a autorización humana.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -77,6 +80,11 @@ class LawyerExamResult:
     citations_unverified: list[dict[str, Any]] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
     provider_state: dict[str, Any] = field(default_factory=dict)
+    # V8.0 Fase 4 (Candidato 1): draft citation audit defects.
+    # Blocking defects = citations in draft to norms NOT in corpus V1.4.
+    # Each defect: {"raw_text": str, "document_name": str, "article_number": str|None,
+    #               "reason": str, "severity": "blocking"}
+    draft_citation_defects: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +110,7 @@ class LawyerExamResult:
             "citations_unverified": self.citations_unverified,
             "limitations": self.limitations,
             "provider_state": self.provider_state,
+            "draft_citation_defects": self.draft_citation_defects,
         }
 
 
@@ -113,7 +122,7 @@ class LawyerExam:
     Construct with:
       case_facts: dict with ``facts``, ``documents``, ``uncertainties``.
       guard: RealProviderGuard wrapping a real LLM provider.
-      citation_auditor: optional, defaults to the V1.3 corpus auditor.
+      citation_auditor: optional, defaults to the V1.4 corpus auditor.
     """
 
     def __init__(
@@ -196,6 +205,12 @@ class LawyerExam:
             self._step_10_draft_document()
             if self.result.overall_status != "INCOMPLETE":
                 return self._finalize()
+            # V8.0 Fase 4 (Candidato 1): Draft citation audit.
+            # Deterministic post-LLM check: detect citations in the draft
+            # that point to norms NOT in corpus V1.4. Blocking if any.
+            self._audit_draft_citations()
+            if self.result.overall_status != "INCOMPLETE":
+                return self._finalize()
             self._step_11_review()
             if self.result.overall_status != "INCOMPLETE":
                 return self._finalize()
@@ -216,11 +231,14 @@ class LawyerExam:
         std_limitations = [
             "El borrador generado requiere revisión y firma de un abogado "
             "humano calificado antes de cualquier actuación procesal real.",
-            "El corpus jurídico V1.3 cubre solo Constitución 1991 arts. "
-            "1-32 + Ley 100/1993 (45 arts.) + Ley 80/1993 (48 arts.) — "
-            "citas fuera de este rango se marcan como NO_RESUELTO.",
-            "No hay jurisprudencia en el corpus (sentencias Corte "
-            "Constitucional rechazadas en V1.2 — content not fetchable).",
+            "El corpus jurídico V1.4 cubre Constitución 1991 (380 arts.), "
+            "Ley 1564/2012 CGP (627 arts.), Ley 640/2001 (51 arts.), "
+            "Ley 906/2004 CPP (564 arts.) y Código Sustantivo del Trabajo "
+            "(485 arts.) — total 2107 artículos. Citas fuera de estos "
+            "cuerpos se marcan como NO_RESUELTO.",
+            "El corpus V1.4 incluye 5 sentencias T-001/002/003/100/445-2020 "
+            "en texto reconstruido (sin parseo por artículo). Otras "
+            "sentencias no están en el corpus.",
         ]
         for lim in std_limitations:
             if lim not in self.result.limitations:
@@ -368,19 +386,19 @@ class LawyerExam:
             name="Investigación y procedencia de fuentes",
             status="ok" if any_found else "abstained",
             summary=(
-                f"Fuentes encontradas en corpus V1.3: {sum(1 for e in evidence if e['type'] == 'found_in_corpus')} "
+                f"Fuentes encontradas en corpus V1.4: {sum(1 for e in evidence if e['type'] == 'found_in_corpus')} "
                 f"de {len(required)} requeridas."
             ),
             evidence=evidence,
         )
         if not any_found:
             step.notes.append(
-                "Ninguna de las fuentes requeridas está en el corpus V1.3. "
+                "Ninguna de las fuentes requeridas está en el corpus V1.4. "
                 "El examen ABSTIENE — no se pueden formular argumentos sin "
                 "evidencia verificable."
             )
             self._abort(
-                "Ninguna fuente requerida está en el corpus V1.3 — el caso "
+                "Ninguna fuente requerida está en el corpus V1.4 — el caso "
                 "no se puede procesar con evidencia verificable.",
                 status="ABSTAINED",
             )
@@ -498,7 +516,7 @@ class LawyerExam:
         )
         if unverified:
             step.notes.append(
-                f"{len(unverified)} citas no están en el corpus V1.3. La "
+                f"{len(unverified)} citas no están en el corpus V1.4. La "
                 f"estrategia debe ABSTENERSE de invocarlas como fundamento."
             )
         self._record_step(step)
@@ -578,7 +596,7 @@ class LawyerExam:
             "una norma que no está en la lista, ABSTENTE de hacerlo y "
             "decláralo como NO_RESUELTO.\n\n"
             f"HECHOS DEL CASO:\n{json.dumps(self.case_facts.get('facts', []), ensure_ascii=False)}\n\n"
-            f"NORMAS VERIFICADAS (corpus V1.3):\n{article_texts}\n\n"
+            f"NORMAS VERIFICADAS (corpus V1.4 — Constitución/CGP/CPP/CST/Ley 640):\n{article_texts}\n\n"
             "ESTRATEGIA (máx 500 palabras, en español, distinguiendo "
             "hechos / inferencias / conclusiones):"
         )
@@ -839,7 +857,7 @@ class LawyerExam:
             f"HECHOS: {json.dumps(self.case_facts.get('facts', []), ensure_ascii=False)}\n"
             f"ESTRATEGIA: {self._strategy_text}\n"
             f"CONTRAARGUMENTOS (a refutar): {self._counter_text or 'N/A'}\n"
-            f"NORMAS VERIFICADAS (corpus V1.3):\n" + "\n".join(
+            f"NORMAS VERIFICADAS (corpus V1.4 — Constitución/CGP/CPP/CST/Ley 640):\n" + "\n".join(
                 f"- {v['document']} art. {v['article']}: {v['article_text_preview']}"
                 for v in self.result.citations_verified
             ) + "\n\n"
@@ -874,6 +892,320 @@ class LawyerExam:
         )
         self._record_step(step)
 
+    # ----- V8.0 Fase 4 (Candidato 1): Draft citation audit -----
+
+    def _audit_draft_citations(self) -> None:
+        """Post-LLM deterministic audit of the drafted document.
+
+        Extracts all citations from ``self.result.drafted_document`` and
+        checks each one against ``self.result.citations_verified``:
+
+        - Citation (slug, article) IN ``citations_verified`` → OK, no action.
+        - Citation slug IN V1.4 corpus but article NOT in
+          ``citations_verified`` → WARNING (limitation; not blocking).
+          The LLM introduced an article of a verified norm that the
+          human did not declare. Requires human review.
+        - Citation slug NOT in V1.4 corpus (external norm or external
+          sentencia) → BLOCKING defect. The LLM cited a norm that is
+          not in the corpus at all.
+
+        If any blocking defect is found → ``self._abort(...BLOCKED)``.
+
+        Disciplina:
+          - This audit does NOT verify fidelity of paraphrase.
+          - It does NOT verify applicability of the cited norm to the case.
+          - It does NOT replace step 11 (LLM self-review) — both run.
+          - It only catches one specific class of hallucination:
+            citations to norms that are NOT in the corpus.
+        """
+        draft = self.result.drafted_document
+        if not draft or not draft.strip():
+            # Step 10 already aborted if draft was empty.
+            return
+
+        # Add the audit disclaimer ALWAYS when the audit runs (regardless
+        # of whether citations are found). This makes it explicit to the
+        # human reviewer that the audit covers only external-norm detection
+        # and does NOT verify paraphrase fidelity nor applicability.
+        disclaimer = (
+            "Audit de citas del draft (V8.0 Fase 4): detecta citas a normas "
+            "externas al corpus V1.4; NO verifica fidelidad de paráfrasis "
+            "ni aplicabilidad jurídica."
+        )
+        if disclaimer not in self.result.limitations:
+            self.result.limitations.append(disclaimer)
+
+        # Use CitationAuditor for extraction only (corpus_version doesn't
+        # matter for extract_citations — it only affects validate_against_corpus).
+        from albra.knowledge.citation_audit import CitationAuditor
+        auditor = CitationAuditor()
+        extracted = auditor.extract_citations(draft)
+        if not extracted:
+            # No citations found in the draft — no further audit needed.
+            self.log.info(
+                "lawyer.exam.draft_audit.no_citations",
+                case_id=self.case_id,
+            )
+            return
+
+        # Build a set of (slug, article) from citations_verified for fast lookup.
+        verified_keys: set[tuple[str, str]] = set()
+        for v in self.result.citations_verified:
+            v_doc = str(v.get("document", "")).lower().strip()
+            v_art = str(v.get("article", "")).strip()
+            # Normalize verified document name to slug using the same aliases
+            # used in _lookup_in_corpus.
+            v_slug = self._alias_to_slug(v_doc)
+            if v_slug:
+                verified_keys.add((v_slug, v_art))
+
+        # Also build a set of verified slugs (for the WARNING case where the
+        # article differs but the norm is verified).
+        verified_slugs: set[str] = {slug for slug, _ in verified_keys}
+
+        # Set of all slugs in V1.4 corpus (for the BLOCKED case).
+        v14_slugs: set[str] = set()
+        # Map of V1.4 doc["number"] (lowercased) → slug, for direct name match.
+        v14_doc_number_to_slug: dict[str, str] = {}
+        try:
+            from albra.knowledge.colombia.corpus_pilot.real_corpus_v14 import (
+                ALL_DOCUMENTS_V14,
+            )
+            for slug, doc in ALL_DOCUMENTS_V14:
+                v14_slugs.add(slug)
+                number = doc.get("number", "")
+                if number:
+                    v14_doc_number_to_slug[number.lower()] = slug
+        except ImportError:
+            # If V1.4 not available, we cannot run this audit. Log and return.
+            self.log.warning("lawyer.exam.draft_audit.v14_unavailable")
+            return
+
+        blocking_defects: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for cite in extracted:
+            doc_name = cite.document_name
+            art_num = cite.article_number or ""
+            # Try to find the V1.4 slug for this citation's doc_name.
+            slug = self._normalize_doc_name_to_slug(doc_name, v14_doc_number_to_slug)
+            if not slug:
+                # Could not normalize the citation's document name AND
+                # it doesn't match any V1.4 doc by number. If it looks
+                # like a structured citation (Ley N de YYYY or Sentencia
+                # X-N/YYYY), treat as external → BLOCKING.
+                if self._looks_like_external_norm(doc_name):
+                    blocking_defects.append({
+                        "raw_text": cite.raw_text,
+                        "document_name": doc_name,
+                        "article_number": art_num,
+                        "slug_attempted": "",
+                        "reason": (
+                            f"Cita a '{doc_name}' (art. {art_num or 'N/A'}) "
+                            f"corresponde a una norma externa NO presente en "
+                            f"el corpus V1.4. Posible alucinación del LLM."
+                        ),
+                        "severity": "blocking",
+                    })
+                    continue
+                # Non-standard citation — conservative WARNING.
+                warnings.append(
+                    f"El draft cita '{doc_name}' (art. {art_num or 'N/A'}) "
+                    f"con nombre no estandarizado — no se pudo normalizar "
+                    f"para verificar contra el corpus. Revisión humana requerida."
+                )
+                continue
+
+            # Check if slug is in V1.4 corpus (it should be, since
+            # normalization only returns slugs found in V1.4 or sentencia
+            # slugs that exist in V1.4).
+            cite_key = (slug, art_num)
+            if cite_key in verified_keys:
+                # OK — citation is in the verified list.
+                continue
+            if slug in verified_slugs:
+                # The norm is verified but the article differs.
+                warnings.append(
+                    f"El draft cita {slug} art. {art_num} que no estaba "
+                    f"en la lista verificada (la norma sí está verificada, "
+                    f"pero el artículo fue introducido por el LLM). "
+                    f"Revisión humana requerida."
+                )
+                continue
+            if slug in v14_slugs:
+                # The norm IS in V1.4 corpus but was NOT in the verified list
+                # (the human did not declare it as a required source).
+                warnings.append(
+                    f"El draft cita {slug} art. {art_num} que está en el "
+                    f"corpus V1.4 pero no fue declarado como fuente "
+                    f"requerida. Revisión humana requerida."
+                )
+                continue
+            # Slug was returned by normalizer but NOT in v14_slugs. This
+            # can happen for sentencia normalization where we returned
+            # the slash→hyphen form without checking V1.4. Treat as
+            # external → BLOCKING.
+            blocking_defects.append({
+                "raw_text": cite.raw_text,
+                "document_name": doc_name,
+                "article_number": art_num,
+                "slug_attempted": slug,
+                "reason": (
+                    f"Cita a '{doc_name}' (art. {art_num or 'N/A'}) "
+                    f"corresponde a una norma externa NO presente en "
+                    f"el corpus V1.4. Posible alucinación del LLM."
+                ),
+                "severity": "blocking",
+            })
+
+        # Record blocking defects in result.
+        self.result.draft_citation_defects.extend(blocking_defects)
+
+        # Add warnings to limitations (non-blocking).
+        for w in warnings:
+            if w not in self.result.limitations:
+                self.result.limitations.append(w)
+
+        # Disclaimer was already added at the start of the audit.
+
+        if blocking_defects:
+            defect_lines = [
+                f"  - {d['document_name']} art. {d['article_number'] or 'N/A'}: {d['raw_text'][:80]}"
+                for d in blocking_defects
+            ]
+            self.log.info(
+                "lawyer.exam.draft_audit.blocked",
+                case_id=self.case_id,
+                blocking_count=len(blocking_defects),
+                warning_count=len(warnings),
+            )
+            self._abort(
+                f"Draft contiene {len(blocking_defects)} cita(s) a norma(s) "
+                f"no verificada(s) en el corpus V1.4 — posible alucinación "
+                f"del LLM. Revisión humana requerida antes de proceder.\n"
+                + "\n".join(defect_lines),
+                status="BLOCKED",
+            )
+            return
+        self.log.info(
+            "lawyer.exam.draft_audit.pass",
+            case_id=self.case_id,
+            extracted_count=len(extracted),
+            warning_count=len(warnings),
+            blocking_count=0,
+        )
+
+    # Aliases map shared between _lookup_in_corpus and _audit_draft_citations.
+    # Mirrors the same aliases defined inline in _lookup_in_corpus.
+    _CITATION_ALIASES: dict[str, str] = {
+        "constitucion": "constitucion",
+        "constitución": "constitucion",
+        "constitución política de 1991": "constitucion",
+        "constitucion politica de 1991": "constitucion",
+        "codigo_sustantivo_trabajo": "codigo_sustantivo_trabajo",
+        "cst": "codigo_sustantivo_trabajo",
+        "codigo sustantivo del trabajo": "codigo_sustantivo_trabajo",
+        "decreto 2663 de 1950": "codigo_sustantivo_trabajo",
+        "ley 1564": "ley_1564_2012",
+        "ley 1564 de 2012": "ley_1564_2012",
+        "cgp": "ley_1564_2012",
+        "código general del proceso": "ley_1564_2012",
+        "codigo general del proceso": "ley_1564_2012",
+        "ley 640": "ley_0640_2001",
+        "ley 640 de 2001": "ley_0640_2001",
+        "ley 906": "ley_0906_2004",
+        "ley 906 de 2004": "ley_0906_2004",
+        "cpp": "ley_0906_2004",
+        "código de procedimiento penal": "ley_0906_2004",
+        "codigo de procedimiento penal": "ley_0906_2004",
+        "ley 100": "ley_100",
+        "ley 100 de 1993": "ley_100",
+        "ley 80": "ley_80",
+        "ley 80 de 1993": "ley_80",
+    }
+
+    def _alias_to_slug(self, doc_name: str) -> str:
+        """Convert a document name (lowercased) to a corpus slug using aliases.
+        Returns "" if no alias matches.
+        """
+        if not doc_name:
+            return ""
+        return self._CITATION_ALIASES.get(doc_name.lower().strip(), "")
+
+    def _normalize_doc_name_to_slug(
+        self, doc_name: str, v14_doc_number_to_slug: dict[str, str] | None = None,
+    ) -> str:
+        """Normalize a citation's document_name (as produced by
+        CitationAuditor.extract_citations) to a V1.4 corpus slug.
+
+        Handles:
+          - "Constitución Política de 1991" → "constitucion"
+          - "Ley 1564 de 2012" → "ley_1564_2012"
+          - "Ley 640 de 2001" → "ley_0640_2001"
+          - "Ley 906 de 2004" → "ley_0906_2004"
+          - "Decreto 2663 de 1950" → "codigo_sustantivo_trabajo"
+          - "Sentencia T-001/2020" → "T-001-2020" (if in V1.4)
+          - External norms/sentencias → "" (caller decides if BLOCKING)
+
+        Args:
+            doc_name: The document_name from CitationAuditor.extract_citations.
+            v14_doc_number_to_slug: Optional map of V1.4 doc["number"] (lowercased)
+                to slug. If provided, used for direct name matching.
+        """
+        if not doc_name:
+            return ""
+        name = doc_name.strip()
+
+        # Direct alias lookup first.
+        slug = self._alias_to_slug(name)
+        if slug:
+            return slug
+
+        # Direct match against V1.4 doc["number"] field.
+        if v14_doc_number_to_slug:
+            direct = v14_doc_number_to_slug.get(name.lower())
+            if direct:
+                return direct
+
+        # Sentencia normalization: "Sentencia T-001/2020" → "T-001-2020"
+        # (V1.4 sentencia slugs use hyphens, not slashes). Return the
+        # normalized form; the caller will check if it's in V1.4.
+        if name.lower().startswith("sentencia "):
+            ref = name[len("sentencia "):].strip()
+            normalized = ref.replace("/", "-")
+            return normalized
+
+        # Could not normalize.
+        return ""
+
+    def _looks_like_external_norm(self, doc_name: str) -> bool:
+        """Check if a citation's document_name looks like a structured
+        citation to an external norm (not in V1.4 corpus).
+
+        Patterns recognized as external:
+          - "Ley N de YYYY" (where the specific Ley is not in V1.4)
+          - "Sentencia X-N/YYYY" (where the specific sentencia is not in V1.4)
+          - "Decreto N de YYYY" (not in V1.4)
+          - "Código X" (not in V1.4)
+        """
+        if not doc_name:
+            return False
+        name = doc_name.strip()
+        # Ley N de YYYY
+        if re.match(r"^Ley\s+\d+\s+de\s+\d{4}$", name, re.IGNORECASE):
+            return True
+        # Sentencia X-N/YYYY (with or without "Sentencia " prefix)
+        if name.lower().startswith("sentencia "):
+            ref = name[len("sentencia "):].strip()
+            if re.match(r"^[A-Z]+-\d+/\d{4}$", ref):
+                return True
+        # Decreto N de YYYY
+        if re.match(r"^Decreto\s+\d+\s+de\s+\d{4}$", name, re.IGNORECASE):
+            return True
+        # Código X (e.g., "Código Civil", "Código Penal")
+        if re.match(r"^C[oó]digo\s+\w+", name, re.IGNORECASE):
+            return True
+        return False
+
     # ----- Step 11: Review -----
 
     def _step_11_review(self) -> None:
@@ -884,7 +1216,7 @@ class LawyerExam:
         prompt = (
             "Eres un abogado colombiano haciendo revisión interna del "
             "siguiente borrador. Verifica:\n"
-            "1. Que todas las normas citadas estén en el corpus V1.3 "
+            "1. Que todas las normas citadas estén en el corpus V1.4 "
             "(no inventadas).\n"
             "2. Coherencia entre hechos y pretensiones.\n"
             "3. Que el borrador no afirme nada que no esté respaldado "

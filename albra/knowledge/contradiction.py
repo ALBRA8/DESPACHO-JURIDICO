@@ -275,19 +275,23 @@ class ContradictionDetector:
 
 # V8.0 Fase 2.2: unified patterns — same simplified form as vigency.py.
 # This resolves HALLAZGO 2 (regex inconsistency between the two modules).
+# V8.0 Fase 4 (Candidato 2): negative lookahead applied for consistency
+# with vigency.py. Excludes substantive uses ("el legislador", "el gobierno",
+# "el reglamento", "la presente Ley", "esta Ley") that describe WHO can
+# modify the article, not an actual amendment.
 _MODIFICADO_POR = re.compile(
-    r'modificado\s+por\s+(.+?)(?:\.|$)',
+    r'modificado\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 _ADICIONADO_POR = re.compile(
-    r'adicionad[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'adicionad[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 _SUBROGADO_POR = re.compile(
-    r'subrogad[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'subrogad[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 _SUSTITUIDO_POR = re.compile(
-    r'(?:sustituid[oa]|derogad[oa])\s+por\s+(.+?)(?:\.|$)',
+    r'(?:sustituid[oa]|derogad[oa])\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )

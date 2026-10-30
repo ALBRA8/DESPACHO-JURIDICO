@@ -60,30 +60,39 @@ class VigencyResult:
 # consistency between vigency.py and contradiction.py.
 
 # "modificado por" — the article text has been amended by another norm.
+# V8.0 Fase 4 (Candidato 2): negative lookahead excludes substantive uses
+# like "modificado por el legislador" / "el gobierno" / "el reglamento" /
+# "la presente Ley" / "esta Ley" — which describe WHO can modify the
+# article, not an actual amendment that has occurred. True amendment
+# markers ("modificado por el artículo N de la Ley X de YYYY") still match.
 _MODIFICADO_POR = re.compile(
-    r'modificado\s+por\s+(.+?)(?:\.|$)',
+    r'modificado\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "adicionado por" — a new paragraph/subsection was added to the article.
 # V8.0 Fase 2.2 (HALLAZGO 3): previously undetected, 30 occurrences in corpus.
+# V8.0 Fase 4 (Candidato 2): same negative lookahead for consistency.
 _ADICIONADO_POR = re.compile(
-    r'adicionad[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'adicionad[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "subrogado por" — the article was replaced by a new provision.
 # V8.0 Fase 2.2 (HALLAZGO 3): previously undetected, 5 occurrences in CST.
+# V8.0 Fase 4 (Candidato 2): same negative lookahead for consistency.
 _SUBROGADO_POR = re.compile(
-    r'subrogad[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'subrogad[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "derogado por" — explicit derogation
+# V8.0 Fase 4 (Candidato 2): same negative lookahead for consistency.
 _DEROGADO_POR = re.compile(
-    r'derogad[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'derogad[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "sustituido por" — explicit substitution
+# V8.0 Fase 4 (Candidato 2): same negative lookahead for consistency.
 _SUSTITUIDO_POR = re.compile(
-    r'sustituid[oa]\s+por\s+(.+?)(?:\.|$)',
+    r'sustituid[oa]\s+por\s+(?!el\s+legislador|el\s+gobierno|el\s+reglamento|la\s+presente\s+Ley|esta\s+Ley)(.+?)(?:\.|$)',
     re.IGNORECASE,
 )
 # "texto original revivido según la Sentencia C-NNN-NN" — special case
