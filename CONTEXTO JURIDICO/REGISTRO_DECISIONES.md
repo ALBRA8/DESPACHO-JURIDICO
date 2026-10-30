@@ -201,3 +201,26 @@ Cada decisión futura debe incluir identificador, fecha, estado, contexto, decis
 
 - **Condiciones para revisar:** Cuando se añadan nuevos formatos de cita jurídica al `CitationAuditor.extract_citations()`, considerar extender `_looks_like_external_norm()` con nuevos patrones. Cuando se detecten nuevos falsos positivos en VigencyChecker, añadir frases al negative lookahead. Cuando se desee verificar fidelidad de paráfrasis, requiere NLI/entailment model — fuera de alcance Fase 4.
 
+
+
+---
+
+## DJ-POOL-001 — Dirección arquitectónica inicial del POOL DE ABOGADOS ALBRA
+
+- **Fecha:** 2026-10-29
+- **Estado:** `PROPOSED — DESIGN REQUIRED`
+- **Origen:** decisión conversacional del usuario sobre organizar especialistas con el patrón de chalecos ALBRA.
+- **Decisión conceptual:** orientar el futuro Pool hacia varios agentes especialistas independientes, cada uno basado en `AGENTE-GENERAL` y equipado con un chaleco jurídico propio, en lugar de un único cerebro monolítico que intente conocer todas las ramas del derecho.
+- **Ejemplos iniciales propuestos por el usuario:**
+  - **MARIO:** `AGENTE-GENERAL + CHALECO LABORAL`.
+  - **ANA:** `AGENTE-GENERAL + CHALECO PENAL`.
+- **Pool superior:** una futura capa de coordinación que recibe asuntos, enruta a uno o varios especialistas, recoge resultados, conserva trazabilidad y consolida respuestas. No debe presentarse como abogado omnisciente ni reemplazar el análisis especializado.
+- **Base de cada especialista:** instancia/proyecto propio derivado de `AGENTE-GENERAL`; el repositorio central `AGENTE-GENERAL` permanece intacto. La especialidad se aporta mediante el chaleco, sus fuentes, reglas, pruebas y límites.
+- **Relación con DESPACHO JURÍDICO V8.0:** V8.0 permanece como primera versión funcional aceptada con limitaciones. Será referencia técnica y antecedente; no se convierte automáticamente en Pool, coordinador ni abogado universal.
+- **Integración prevista:** evaluar MCP para comunicación y delegación entre Pool y especialistas. No se aprueba aún ningún contrato, servidor, permiso ni flujo de producción.
+- **Expansión:** otras especialidades (civil, comercial, administrativo/contencioso, procesal, etc.) quedan como posibilidades sujetas a caso de uso y auditoría; no son una lista de agentes autorizados.
+- **Salvaguardas:** separación de corpus, expedientes, permisos y memoria; trazabilidad por especialista; abstención fuera de alcance; revisión humana cualificada antes de actuaciones reales; registro de desacuerdos entre especialistas.
+- **Alternativa descartada provisionalmente:** un único agente/cerebro monolítico con todas las ramas jurídicas. Motivo: mezcla de responsabilidades y límites, mayor complejidad de validación y riesgo de aparentar cobertura que no está demostrada.
+- **Siguiente paso:** diseño y auditoría de viabilidad sin cambios de código ni creación de agentes. Comparar la arquitectura de repositorios independientes, el rol del Pool, MCP, seguridad, aislamiento y estrategia de piloto.
+- **Límite de autorización:** esta decisión registra una dirección conceptual preferida por el usuario. **No autoriza** crear MARIO, ANA, el Pool, repositorios, chalecos, nuevos corpus ni modificar `AGENTE-GENERAL` o `DESPACHO-JURIDICO`. Se requiere diseño formal y autorización explícita posterior.
+
