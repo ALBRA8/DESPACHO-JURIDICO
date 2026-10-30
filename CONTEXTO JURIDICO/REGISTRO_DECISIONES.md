@@ -104,3 +104,47 @@ Cada decisión futura debe incluir identificador, fecha, estado, contexto, decis
   - 19 tests nuevos. 1466 total. CI verde.
 
 - **Evidencia:** Commit `1e4ad53`, CI Run `40876863242` SUCCESS, 1466 passed.
+
+---
+
+## D-V8.0-F3 — Referencias normativas deterministas y paso 9 condicional
+
+- **Identificador:** D-V8.0-F3
+- **Fecha:** 2026-10-30
+- **Estado:** APPROVED
+- **Contexto:** Fase 2 cerró B6 (vigencia) y B7 quedó como PARCIALMENTE RESUELTA (sin contradicción semántica). Fase 3 cierra la cobertura de trazabilidad de cross-references artículo→artículo dentro del corpus V1.4 y endurece el paso 9 procesal con activación condicional estricta.
+
+- **Decisión:** Introducir un módulo nuevo `albra/knowledge/norm_reference.py` con `NormReference` (dataclass frozen) y reescribir `_step_09_procedural_requirements()` en `albra/lawyer/exam.py` con 4 guards estrictos. Sin alterar VigencyChecker, ContradictionDetector, AdversarialValidator, RealProviderGuard ni ningún contrato de seguridad existente.
+
+- **NormReference — disciplina:**
+  - Resuelve cross-references artículo→artículo con regex determinista (sin LLM, sin inferencia semántica).
+  - `reference_type` siempre = `"references"` (informativa) — NUNCA `contradiction`, `modification`, `incompatibility` ni `prevalence`.
+  - `confidence` solo admite `"verified"` (source y target en V1.4) o `"uncertain"` (en caso contrario). NO existe `inferred`.
+  - Jerarquía normativa DERIVADA del `document_type` (Constitución=1, ley/codigo_sustantivo=2, desconocido=999). NO se almacena en la referencia. NO existen `hierarchy_higher`/`hierarchy_lower` como campos.
+  - Frases informativas (`de conformidad con`, `con arreglo a`, `según lo dispuesto en`, `en los términos del artículo`) NO se convierten en contradicción, modificación, incompatibilidad ni prevalencia.
+  - `uncertain` NUNCA bloquea: `NormReference` no es consumido por `AdversarialValidator`. Es exclusivamente metadata de trazabilidad.
+
+- **Paso 9 — disciplina condicional:**
+  1. `procedure_type` es EXPLÍCITO: leído de `case_facts.get("procedure_type", "")`. Nunca inferido por keywords.
+  2. Si ausente → ABSTAINED. Si no soportado (`civil`/`penal`/`conciliación`) → ABSTAINED. Si código procesal no en V1.4 → ABSTAINED. Si sin artículos con keywords procesales → ABSTAINED.
+  3. Las keywords (`término`, `plazo`, `competencia`, `juzgado`, `audiencia`, `notificación`, `recurrido`, `interpone`, `substanciación`) recuperan ÚNICAMENTE evidencia contextual dentro del código procesal ya seleccionado.
+  4. La salida del paso 9 con `status="ok"` incluye disclaimer explícito: *"los artículos presentados son resultado de una búsqueda por keywords, no de un análisis jurídico del procedimiento aplicable. Requieren revisión por abogado humano para confirmar relevancia y aplicabilidad."*
+
+- **Alternativas consideradas:**
+  - *Inferir `procedure_type` por keywords del caso* — RECHAZADO: una keyword no determina un procedimiento jurídico.
+  - *Convertir referencias informativas en contradicciones implícitas* — RECHAZADO: `de conformidad con` ≠ oposición.
+  - *Resolver referencias externas vía LLM* — RECHAZADO: el LLM no puede crear relaciones `verified`.
+  - *Almacenar jerarquía como campo de la referencia* — RECHAZADO: la jerarquía es propiedad del `document_type`, no de la referencia.
+  - *Inventar rangos jurídicos para tipos desconocidos* — RECHAZADO: tipo desconocido → `999` / `"unknown"`.
+
+- **Consecuencias:**
+  - 127 referencias totales resueltas (44 verified + 83 uncertain) sobre el corpus V1.4 real.
+  - `NormReference` no es importado por ningún módulo bajo `albra/` fuera de `norm_reference.py`. Las 44 verified **no cambian ninguna decisión del motor** — aportan exclusivamente trazabilidad determinista (opción B).
+  - Paso 9 del caso piloto V7.0 (habeas corpus, sin `procedure_type`) sigue ABSTAINED.
+  - B7 continúa como PARCIALMENTE RESUELTA. Fase 3 NO introdujo detección de contradicción semántica.
+  - 19 tests nuevos. 1497 total. CI verde.
+
+- **Evidencia:** Commit `0c886be`, CI Run `40980036870` SUCCESS (lint + 3.10/3.11/3.12 + clean-room), 1497 passed.
+
+- **Condiciones para revisar:** Cuando se añadan nuevos `document_type` reconocidos al corpus, extender `_HIERARCHY_RANK` en `norm_reference.py`. Cuando se añadan nuevos códigos procesales al corpus V1.4, extender `proc_map` en `exam.py` paso 9. Cuando se desee detección semántica de contradicciones, requires ontología jurídica formal — fuera del alcance de Fase 3.
+

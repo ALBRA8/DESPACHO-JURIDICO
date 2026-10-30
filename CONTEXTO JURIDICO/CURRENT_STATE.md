@@ -1,8 +1,186 @@
 # DESPACHO JURÍDICO — ESTADO ACTUAL
 
-- **Estado del documento:** `V8.0 FASE 2.2 — CORRECCIÓN VERIFICABLE DE B7`
-- **Última revisión documental:** 2026-10-29
+- **Estado del documento:** `V8.0 FASE 3 — REFERENCIAS NORMATIVAS Y PASO 9 CONDICIONAL`
+- **Última revisión documental:** 2026-10-30
 - **Repositorio:** `ALBRA8/DESPACHO-JURIDICO`
+- **HEAD inicial V8.0 Fase 3:** `47c0555` (V8.0 Fase 2.2 docs)
+- **HEAD final V8.0 Fase 3:** `0c886be` (V8.0 Fase 3 — referencias normativas y paso 9 condicional)
+- **Push:** VERIFIED (47c0555..0c886be main)
+- **CI:** Run `40980036870`, commit `0c886be`, SUCCESS
+  - lint: SUCCESS
+  - test 3.10/3.11/3.12: SUCCESS
+  - clean-room: SUCCESS
+
+## Commits V8.0 Fase 3
+
+| SHA | Mensaje |
+|---|---|
+| `0c886be` | feat: V8.0 Fase 3 — referencias normativas y paso 9 condicional |
+
+## Resumen ejecutivo V8.0 Fase 3
+
+Fase 3 del plan V8.0: introduce un `NormReference` determinista para
+resolver cross-references artículo→artículo del corpus V1.4 y
+convierte el paso 9 (requisitos procesales) del `LawyerExam` en
+activación condicional basada en un `procedure_type` explícito.
+
+**Disciplina de seguridad preservada:**
+- No se infiere `procedure_type` por keywords.
+- No se presenta evidencia contextual como conclusión jurídica.
+- No se activa contradicción semántica.
+- No se crea prevalencia jurídica automática.
+- No se resuelven referencias externas (quedan como `uncertain`).
+- No se inventan rangos jurídicos para tipos desconocidos.
+
+**Trazabilidad:**
+- V5.2 → multitenancy
+- V6.0 → OIDC/OAuth real
+- V6.0.1 → correcciones de seguridad OIDC
+- V7.0 → graduación del abogado operativo
+- V8.0 Fase 1 → Corpus V1.4 (2107 artículos + 5 sentencias)
+- V8.0 Fase 2 → Validación jurídica
+- V8.0 Fase 2.2 → Corrección verificable de B7
+- V8.0 Fase 3 → Referencias normativas + paso 9 condicional (este documento)
+
+## Componentes implementados
+
+### 1. NormReference (`albra/knowledge/norm_reference.py`)
+
+Resuelve cross-references artículo→artículo en el corpus V1.4 a
+partir de patrones regex deterministas:
+
+- `artículo N de la Constitución`
+- `artículo N de la Ley X de YYYY`
+- `artículo N del Código Sustantivo del Trabajo`
+- `artículo N del Código General del Proceso`
+- `artículo N del Código de Procedimiento Penal`
+
+Resultado: `NormReference` (dataclass frozen) con:
+- `source_doc`, `source_article`, `target_doc`, `target_article`
+- `reference_type` = siempre `"references"` (informativa)
+- `confidence` = `"verified"` solo cuando source y target existen en V1.4;
+  `"uncertain"` en caso contrario
+- `evidence`, `evidence_source`, `source_location`
+
+**Reglas de seguridad:**
+- NO usa LLM. Sin imports de `albra.llm` ni providers.
+- NO crea contradicciones: el `ContradictionDetector` usa patrones
+  distintos (`contraviene`, `incompatible con`) — no los de
+  `NormReference`.
+- NO crea modificaciones: los marcadores `modificado por`/`adicionado
+  por`/`subrogado por` pertenecen al `VigencyChecker`.
+- NO crea prevalencia: la jerarquía normativa es derivada del
+  `document_type`, no almacenada en la referencia.
+- `uncertain` NO bloquea: `AdversarialValidator` no consume
+  `NormReference`; es puramente metadata de trazabilidad.
+- Frases informativas (`de conformidad con`, `con arreglo a`,
+  `según lo dispuesto en`, `en los términos del artículo`) NO se
+  convierten en contradicción ni en prevalencia — son patrones
+  generales del `NormReference`, distintos a los patrones de
+  contradicción explícita del `ContradictionDetector`.
+
+### 2. Jerarquía normativa derivada
+
+`get_hierarchy_rank(document_type)` y `compare_hierarchy(a, b)`:
+- `constitucion` → 1 (norma de normas, art. 4)
+- `ley` → 2 (rango legislativo)
+- `codigo_sustantivo` → 2 (Decreto-Ley 2663/1950 — mismo rango que ley)
+- Tipo desconocido → `999` / comparación retorna `"unknown"`
+
+No existe `inferred`, `hierarchy_higher` ni `hierarchy_lower` como
+campos. La jerarquía es un cálculo derivado, no una relación
+almacenada. Los tipos desconocidos NO reciben rango jurídico inventado.
+
+### 3. Paso 9 condicional (`albra/lawyer/exam.py`)
+
+`_step_09_procedural_requirements()` reescrito con 4 guards estrictos:
+
+1. **`procedure_type` explícito**: leído de
+   `self.case_facts.get("procedure_type", "")`. Nunca inferido por
+   keywords. Si ausente → ABSTAINED.
+2. **`procedure_type` soportado**: `proc_map` solo reconoce
+   `civil` (→ CGP), `penal` (→ CPP), `conciliación` (→ Ley 640). Si
+   no soportado → ABSTAINED.
+3. **Código procesal en corpus**: si el slug no está en
+   `ALL_DOCUMENTS_V14` → ABSTAINED.
+4. **Evidencia con keywords**: las keywords (`término`, `plazo`,
+   `competencia`, `juzgado`, `audiencia`, `notificación`, `recurrido`,
+   `interpone`, `substanciación`) recuperan ÚNICAMENTE evidencia
+   contextual dentro del código ya seleccionado. Si no encuentran
+   artículos → ABSTAINED.
+
+Solo tras pasar los 4 guards → `status="ok"` con evidencia contextual
+y disclaimer explícito: *"los artículos presentados son resultado de
+una búsqueda por keywords, no de un análisis jurídico del
+procedimiento aplicable. Requieren revisión por abogado humano para
+confirmar relevancia y aplicabilidad."*
+
+## Conteos
+
+| Métrica | V8.0 Fase 2.2 (baseline) | V8.0 Fase 3 |
+|---|---|---|
+| Tests passed | 1478 | **1497** |
+| Tests skipped | 7 | **7** |
+| Tests failed | 0 | **0** |
+| Net new tests | — | **+19** |
+| Lint | All checks passed | All checks passed |
+| CI matrix | 3.10/3.11/3.12 SUCCESS | 3.10/3.11/3.12 SUCCESS |
+| Clean-room | SUCCESS | SUCCESS |
+| Referencias totales | — | 127 |
+| Referencias verified | — | 44 |
+| Referencias uncertain | — | 83 |
+
+## Referencias verified — muestra representativa
+
+| Source | Target | Tipo | Confidence | Cambia decisión del motor? |
+|---|---|---|---|---|
+| constitución art. 116 | constitución art. 237 | references | verified | NO — solo enriquece contexto |
+| CPP art. 89 | constitución art. 58 | references | verified | NO — solo enriquece contexto |
+| CGP art. 621 | Ley 640 art. 38 | references | verified | NO — solo enriquece contexto |
+| CST art. 353 | constitución art. 39 | references | verified | NO — solo enriquece contexto |
+| constitución art. 48 | Ley 812/2003 (externa) | references | uncertain | NO — solo enriquece contexto |
+
+`NormReference` no es importado por ningún módulo bajo `albra/` fuera
+de `norm_reference.py`. Por tanto, las 44 referencias verified **no
+cambian ninguna decisión del motor** (VigencyChecker, ContradictionDetector,
+AdversarialValidator, LawyerExam). Aportan exclusivamente
+trazabilidad determinista — opción B (mejora de contexto sin
+alteración de decisiones).
+
+## Confirmaciones
+
+- AGENTE-GENERAL: HEAD `69c79da`, no modificado ✓
+- Corpus V1.3: preservado sin cambios ✓
+- Corpus V1.4: preservado sin cambios ✓ (último commit: `47a5bd1`)
+- v14_raw HTMLs: preservados sin cambios ✓
+- `exam.py`: solo método `_step_09_procedural_requirements` modificado ✓
+- `RealProviderGuard`: sin cambios ✓
+- `VigencyChecker`: sin cambios ✓
+- `ContradictionDetector`: sin cambios ✓
+- `AdversarialValidator`: sin cambios ✓
+- Seguridad, RBAC, OIDC, auth, audit: sin cambios ✓
+- NVIDIAProvider: sin cambios ✓
+- Abstenciones legítimas: preservadas ✓
+- `procedure_type` nunca inferido por keywords ✓
+- Disclaimer de revisión humana presente en paso 9 ✓
+
+## Estado B7 después de Fase 3
+
+B7 continúa como **PARCIALMENTE RESUELTA**. `_check_explicit_conflict_markers()`
+sigue operando con cross-references explícitas (`contraviene`,
+`incompatible con`). Fase 3 NO introdujo detección de contradicción
+semántica — la decisión arquitectónica de Fase 2/2.2 se mantiene: sin
+ontología jurídica, la inferencia semántica genera falsos positivos y
+queda excluida.
+
+## Próximas fases (NO iniciadas)
+
+- Fase 4: Preparación para producción (solo documentación)
+
+---
+
+# Histórico: V8.0 Fase 2.2 (corrección verificable de B7)
+
 - **HEAD inicial V8.0 Fase 2.2:** `9af39dd` (V8.0 Fase 2 docs)
 - **HEAD final V8.0 Fase 2.2:** `688dec6` (V8.0 Fase 2.2 — corrección B7)
 - **Push:** VERIFIED (9af39dd..688dec6 main)

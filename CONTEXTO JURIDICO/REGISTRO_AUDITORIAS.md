@@ -123,3 +123,79 @@ B7 queda registrada como LIMITACIÓN / TRABAJO PENDIENTE.
 
 V8.0 FASE 2 — VALIDACIÓN JURÍDICA: CERRADA CON CI VERDE.
 B6 (vigencia) cerrada. B7 (contradicciones) registrada como limitación explícita.
+
+---
+
+## A-V8.0-F3 — Auditoría de referencias normativas y paso 9 condicional
+
+- **Fecha:** 2026-10-30
+- **Alcance:** Implementación V8.0 Fase 3 — `NormReference`, jerarquía derivada, paso 9 condicional.
+- **Auditor:** ALBRA Constructor (auto-auditoría para el commit V8.0 Fase 3, seguida de verificación pre-commit estricta por revisión independiente).
+
+### Verificaciones realizadas
+
+| # | Verificación | Estado | Evidencia |
+|---|---|---|---|
+| 1 | Diff real coincide con alcance aprobado | VERIFIED | `git diff --stat`: solo `albra/lawyer/exam.py` modificado + 2 archivos nuevos |
+| 2 | `procedure_type` es EXPLÍCITO (no inferido) | VERIFIED | `exam.py` línea 667: `self.case_facts.get("procedure_type", "")` |
+| 3 | `procedure_type` ausente → ABSTAINED | VERIFIED | test_step_9_abstain_without_procedure_type PASS |
+| 4 | `procedure_type` desconocido → ABSTAINED | VERIFIED | test_step_9_abstain_unknown_procedure_type PASS |
+| 5 | Código procesal ausente → ABSTAINED | VERIFIED | exam.py líneas 735–752: `proc_doc is None` path |
+| 6 | Evidencia insuficiente → ABSTAINED | VERIFIED | exam.py líneas 771–789: `relevant_arts` vacío path |
+| 7 | Keywords solo recuperan evidencia contextual | VERIFIED | exam.py líneas 754–769: filter dentro del código ya seleccionado |
+| 8 | Disclaimer de revisión humana presente | VERIFIED | exam.py notas + limitations |
+| 9 | Paso 9 no debilita guards previos/posteriores | VERIFIED | paso 10 mantiene `if not self._strategy_text:`; paso 7/8 mantienen RealProviderGuard |
+| 10 | `NormReference` no usa LLM | VERIFIED | sin imports `albra.llm`; `inspect.getsource(resolve_references)` limpio |
+| 11 | `reference_type` siempre `"references"` | VERIFIED | test_norm_reference_reference_type_is_references PASS |
+| 12 | `confidence` solo `verified`/`uncertain` | VERIFIED | campo dataclass default `"uncertain"`; solo set `"verified"` cuando target ∈ article_index |
+| 13 | No existe `inferred` | VERIFIED | dataclass fields no contiene `inferred` |
+| 14 | No existe `hierarchy_higher`/`hierarchy_lower` | VERIFIED | solo `compare_hierarchy()` retorna string |
+| 15 | Jerarquía derivada del `document_type` | VERIFIED | `_HIERARCHY_RANK` lookup |
+| 16 | Tipo desconocido → 999 / `"unknown"` | VERIFIED | test_hierarchy_unknown_type PASS |
+| 17 | `uncertain` no bloquea | VERIFIED | test_uncertain_reference_not_blocking PASS |
+| 18 | Referencia informativa → NO contradiction | VERIFIED | test manual con 4 frases (`de conformidad con`, `con arreglo a`, `según lo dispuesto en`, `en los términos del artículo`) → 0 `explicit_conflict` |
+| 19 | Referencia external → NO verified | VERIFIED | Ley 812/2003 (no en corpus) → uncertain |
+| 20 | LLM no puede crear relación verified | VERIFIED | NormReference es dataclass frozen poblado solo por `resolve_references` regex |
+| 21 | 127 referencias totales (44 verified + 83 uncertain) | VERIFIED | log `norm_reference.resolve` |
+| 22 | Verified = source y target existen en V1.4 | VERIFIED | muestra manual: constitución art. 237 ✓, art. 58 ✓, art. 39 ✓, Ley 640 art. 38 ✓ |
+| 23 | `NormReference` no consumido por motor | VERIFIED | grep: 0 imports fuera de `norm_reference.py` y tests |
+| 24 | Valor funcional real = opción B (trazabilidad sin cambiar decisiones) | VERIFIED | muestra representativa: ninguna verified cambia decisión del motor |
+| 25 | Corpus V1.3 intacto | VERIFIED | último commit Fase 1 `47a5bd1` |
+| 26 | Corpus V1.4 intacto | VERIFIED | último commit Fase 1 `47a5bd1` |
+| 27 | v14_raw HTMLs intactos | VERIFIED | sin cambios en working tree |
+| 28 | AGENTE-GENERAL intacto | VERIFIED | HEAD `69c79da`, sin cambios |
+| 29 | `RealProviderGuard` sin cambios | VERIFIED | git diff vacío |
+| 30 | `VigencyChecker` sin cambios | VERIFIED | git diff vacío |
+| 31 | `ContradictionDetector` sin cambios | VERIFIED | git diff vacío |
+| 32 | `AdversarialValidator` sin cambios | VERIFIED | git diff vacío |
+| 33 | Seguridad/RBAC/OIDC/auth/audit sin cambios | VERIFIED | git diff vacío |
+| 34 | Suite completa: 0 failures relevantes | VERIFIED | 1497 passed, 7 skipped (knowledge/lawyer/llm/security/reasoning/audit/matters/identity/eval) |
+| 35 | Ruff PASS en archivos Fase 3 | VERIFIED | `ruff check albra/knowledge/norm_reference.py albra/lawyer/exam.py tests/knowledge/test_v80_fase3_norm_reference.py` → All checks passed |
+| 36 | `git diff --check` limpio | VERIFIED | sin whitespace errors |
+| 37 | Python 3.10/3.11/3.12 PASS | VERIFIED | CI Run `40980036870` jobs test (3.10/3.11/3.12) = success |
+| 38 | Lint job PASS | VERIFIED | CI Run `40980036870` job lint = success |
+| 39 | Clean-room PASS | VERIFIED | CI Run `40980036870` job clean-room = success |
+| 40 | Push VERIFIED | VERIFIED | `git rev-parse HEAD` == `git rev-parse origin/main` == `0c886be` |
+| 41 | Caso piloto V7.0 (habeas corpus) sin `procedure_type` → paso 9 ABSTAINED | VERIFIED | test_pilot_case_step_9_still_abstained_without_procedure_type PASS |
+
+### Limitaciones explícitas
+
+- **B7 continúa PARCIALMENTE RESUELTA.** Fase 3 NO introdujo detección de contradicción semántica. La decisión arquitectónica de Fase 2/2.2 se mantiene: sin ontología jurídica formal, la inferencia semántica genera falsos positivos y queda excluida.
+- **`NormReference` no aporta valor funcional al motor** — solo trazabilidad determinista. Esto es aceptable (opción B) porque la implementación es mínima y segura.
+- **Resolución de referencias externas**: las 83 uncertain no se resuelven a un `target_doc` identificable. Requeriría ingerir las leyes externas referenciadas (Código Civil, Ley 812/2003, etc.) — fuera del alcance de Fase 3.
+- **Determinación definitiva de aplicabilidad**: el paso 9 con `status="ok"` NO constituye análisis jurídico del procedimiento aplicable. El disclaimer lo explicita.
+- **Errores pre-existentes en `scripts/v14_ingest/fetch_sources.py`** (ruff F401 + I001): detectados en `ruff check .` pero NO en `ruff check albra/ tests/` (alcance del lint de CI). Existen en HEAD `47c0555` limpio — no introducidos por Fase 3.
+
+### Dictamen
+
+V8.0 FASE 3 — REFERENCIAS NORMATIVAS Y PASO 9 CONDICIONAL: CERRADA CON CI VERDE.
+
+- 127 referencias resueltas (44 verified + 83 uncertain).
+- Paso 9 estrictamente condicional (4 guards).
+- Sin inferencia de `procedure_type`.
+- Sin contradicción semántica.
+- Sin prevalencia jurídica automática.
+- Corpus V1.3, V1.4, v14_raw, AGENTE-GENERAL y todos los contratos de seguridad intactos.
+- CI verde (lint + 3.10/3.11/3.12 + clean-room) sobre commit `0c886be`.
+- B7 continúa PARCIALMENTE RESUELTA — documentada como limitación.
+
